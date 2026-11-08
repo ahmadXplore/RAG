@@ -181,7 +181,7 @@ async def upload_and_process_document(
     from packages.ingestion.security_scanner import FileSecurityScanner, FileSecurityError
 
     try:
-        scan_res = FileSecurityScanner.scan_and_sanitize(content, safe_name, ext)
+        scan_res = await asyncio.to_thread(FileSecurityScanner.scan_and_sanitize, content, safe_name, ext)
         content = scan_res.sanitized_content
     except FileSecurityError as sec_err:
         await record_audit_log(
@@ -215,8 +215,11 @@ async def upload_and_process_document(
             "message": f"Document '{existing_doc.title}' has already been processed and is ready.",
         }
 
-    with open(target_path, "wb") as f:
-        f.write(content)
+    def _write_bytes(p: Path, b: bytes) -> None:
+        with open(p, "wb") as f:
+            f.write(b)
+
+    await asyncio.to_thread(_write_bytes, target_path, content)
 
     meta = extract_educational_metadata(
         file_path=target_path,

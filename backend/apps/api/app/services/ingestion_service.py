@@ -173,7 +173,9 @@ async def process_ingestion_job(job_id: uuid.UUID) -> None:
             await session.commit()
 
             dispatcher = ParserDispatcher()
-            parsed_doc = dispatcher.dispatch(
+            # Offload CPU-bound parsing (PDF, DOCX, RapidOCR) to a worker thread so the event loop stays free
+            parsed_doc = await asyncio.to_thread(
+                dispatcher.dispatch,
                 file_path=target_path,
                 document_id=str(doc.id),
                 document_version_id=str(version.id),
@@ -185,7 +187,12 @@ async def process_ingestion_job(job_id: uuid.UUID) -> None:
             await session.commit()
 
             normalizer = DocumentNormalizer(target_tokens=500, overlap_tokens=60)
-            sections, chunks = normalizer.normalize(parsed_doc, version.id)
+            # Offload token-bound normalization and chunking to worker thread
+            sections, chunks = await asyncio.to_thread(
+                normalizer.normalize,
+                parsed_doc,
+                version.id,
+            )
             if not chunks:
                 raise ValueError(
                     "This document appears to be a scanned image PDF with no extractable text layer. "
@@ -225,7 +232,9 @@ async def process_ingestion_job(job_id: uuid.UUID) -> None:
                 "year": doc.report_year,
                 "document_type": doc.document_type,
             }
-            indexed_count = indexer.index_chunks(
+            # Offload heavy ONNX neural embedding and vector indexing to worker thread
+            indexed_count = await asyncio.to_thread(
+                indexer.index_chunks,
                 chunks=chunks,
                 document_metadata=doc_meta,
                 batch_size=64,

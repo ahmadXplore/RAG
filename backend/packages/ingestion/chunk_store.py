@@ -94,26 +94,23 @@ class ChunkStore:
     async def _upsert_chunks(
         self, document_version_id: uuid.UUID, chunks: list[ChunkRecord]
     ) -> None:
-        """Insert chunks; on conflict (version_id, chunk_index) update in place.
+        """Efficiently batch-insert or update chunks without N+1 query locks."""
+        # Query existing chunks in ONE single query instead of N individual queries
+        existing_res = await self._session.execute(
+            select(DocumentChunk).where(
+                DocumentChunk.document_version_id == document_version_id
+            )
+        )
+        existing_map = {c.chunk_index: c for c in existing_res.scalars().all()}
 
-        The conflict target mirrors the unique constraint defined on DocumentChunk:
-            (document_version_id, chunk_index)
-        """
+        new_chunks = []
         for chunk in chunks:
             chunk_uuid = uuid.UUID(chunk.chunk_id)
             metadata = {
                 "content_hash": chunk.content_hash,
             }
 
-            # Try to find an existing chunk with the same version + index
-            result = await self._session.execute(
-                select(DocumentChunk).where(
-                    DocumentChunk.document_version_id == document_version_id,
-                    DocumentChunk.chunk_index == chunk.chunk_index,
-                )
-            )
-            existing = result.scalar_one_or_none()
-
+            existing = existing_map.get(chunk.chunk_index)
             if existing is not None:
                 # Update in place (re-parse scenario)
                 existing.text = chunk.text
@@ -129,7 +126,7 @@ class ChunkStore:
                 db_chunk = DocumentChunk(
                     id=chunk_uuid,
                     document_version_id=document_version_id,
-                    section_id=None,  # section linking is resolved in a separate pass
+                    section_id=None,
                     chunk_index=chunk.chunk_index,
                     chunk_type=chunk.chunk_type,
                     text=chunk.text,
@@ -141,7 +138,10 @@ class ChunkStore:
                     content_hash=chunk.content_hash,
                     metadata_=metadata,
                 )
-                self._session.add(db_chunk)
+                new_chunks.append(db_chunk)
+
+        if new_chunks:
+            self._session.add_all(new_chunks)
 
         if chunks:
             await self._session.flush()
