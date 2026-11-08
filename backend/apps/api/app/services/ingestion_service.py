@@ -6,6 +6,7 @@ Stages: validation, parsing, normalization, chunking, embedding, indexing, compl
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path

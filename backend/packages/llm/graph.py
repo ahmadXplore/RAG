@@ -235,10 +235,30 @@ async def _node_contextualize_query(state: GraphState, provider: Any) -> GraphSt
 
 
 async def _node_classify_query(state: GraphState, provider: Any) -> GraphState:
-    """Classify the query type using the LLM.
+    """Classify the query type using fast heuristics or LLM fallback.
 
     CoT field — result is never returned to the client.
     """
+    q_lower = state["question"].lower().strip()
+
+    # Fast-path heuristic classification without waiting for 2-3s LLM round-trip
+    if any(k in q_lower for k in ["compare", "vs.", " vs ", "versus", "difference between", "differ from"]):
+        state["query_type"] = "COMPARISON"
+        state["requires_calculation"] = False
+        return state
+    elif any(k in q_lower for k in ["how many", "percentage", "average", "total", "ratio", "median", "mean", "calculate", "sum of"]):
+        state["query_type"] = "NUMERICAL"
+        state["requires_calculation"] = True
+        return state
+    elif any(k in q_lower for k in ["trend", "over time", "between 19", "between 20", "from 19", "from 20", "since 19", "since 20", "history of"]):
+        state["query_type"] = "TEMPORAL"
+        state["requires_calculation"] = False
+        return state
+    elif not any(char.isdigit() for char in q_lower) and len(q_lower.split()) < 14 and not any(k in q_lower for k in ["and", "across", "both"]):
+        state["query_type"] = "DIRECT"
+        state["requires_calculation"] = False
+        return state
+
     messages = build_query_classification_messages(state["question"])
     try:
         raw = await provider.generate(messages=messages, response_schema={})
@@ -261,6 +281,21 @@ async def _node_extract_constraints(state: GraphState, provider: Any) -> GraphSt
 
     CoT field — result is never returned to the client.
     """
+    q_lower = state["question"].lower()
+    import re
+    has_year = bool(re.search(r"\b(19\d\d|20\d\d)\b", q_lower))
+    has_org = any(alias in q_lower for alias in ALIAS_MAP)
+    has_doc_type = any(dt in q_lower for dt in DOC_TYPE_MAP)
+
+    # Fast-path for direct conceptual questions with no date or institutional filters
+    if not has_year and not has_org and not has_doc_type and state.get("query_type") == "DIRECT":
+        state["entities"] = []
+        state["metric"] = None
+        state["time_period"] = None
+        state["retrieval_filters"] = {}
+        state["retrieval_query"] = state["question"]
+        return state
+
     messages = build_constraint_extraction_messages(
         state["question"], state.get("query_type", "DIRECT")
     )
