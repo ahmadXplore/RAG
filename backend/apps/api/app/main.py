@@ -96,18 +96,19 @@ app.add_middleware(
 
 @app.middleware("http")
 async def body_size_limit_middleware(request: Request, call_next):
-    """Enforce a global request body size limit to prevent body-bomb DoS.
+    """Enforce request body size limits to prevent body-bomb DoS attacks.
 
-    Cloudflare blocks payloads > 100MB by default; we enforce a tighter
-    10MB limit at the application layer for defense-in-depth.
-    Document uploads have their own 50MB check in the route handler.
+    Standard API endpoints (chat, search, auth, users): 10MB limit.
+    Document uploads (/api/v1/documents/upload): 100MB limit for textbooks, books, and large corpora.
     """
-    _MAX_BODY_BYTES = 10 * 1024 * 1024  # 10 MB
+    is_upload = request.url.path.startswith("/api/v1/documents/upload")
+    max_bytes = 100 * 1024 * 1024 if is_upload else 10 * 1024 * 1024
     content_length = request.headers.get("content-length")
-    if content_length and int(content_length) > _MAX_BODY_BYTES:
+    if content_length and int(content_length) > max_bytes:
+        limit_mb = 100 if is_upload else 10
         return JSONResponse(
             status_code=413,
-            content={"error": {"code": "PAYLOAD_TOO_LARGE", "message": "Request body exceeds the 10 MB limit."}},
+            content={"error": {"code": "PAYLOAD_TOO_LARGE", "message": f"Request body exceeds the {limit_mb} MB limit."}},
         )
     return await call_next(request)
 

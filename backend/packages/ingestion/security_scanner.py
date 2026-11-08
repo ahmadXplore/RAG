@@ -36,9 +36,9 @@ class ScanResult:
 class FileSecurityScanner:
     """Scans and sanitizes uploaded documents before parsing or indexing."""
 
-    MAX_FILE_SIZE = 50 * 1024 * 1024  # 50 MB
+    MAX_FILE_SIZE = 100 * 1024 * 1024  # 100 MB
     MAX_UNCOMPRESSED_RATIO = 100       # Zip bomb protection
-    MAX_UNCOMPRESSED_SIZE = 150 * 1024 * 1024  # 150 MB
+    MAX_UNCOMPRESSED_SIZE = 300 * 1024 * 1024  # 300 MB
 
     # Dangerous PDF object patterns (inspected outside compressed stream bodies)
     PDF_MALICIOUS_PATTERNS = [

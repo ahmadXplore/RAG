@@ -171,10 +171,10 @@ async def upload_and_process_document(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Uploaded file is empty.",
         )
-    if len(content) > 50 * 1024 * 1024:
+    if len(content) > 100 * 1024 * 1024:
         raise HTTPException(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            detail="File size exceeds 50MB limit.",
+            detail="File size exceeds 100MB limit.",
         )
 
     # Enterprise Malicious File & Corruption Security Scan

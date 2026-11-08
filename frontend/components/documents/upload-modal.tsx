@@ -265,7 +265,7 @@ export function UploadModal({ isOpen, onClose, onSuccess }: UploadModalProps) {
                   Click to browse or drag & drop document
                 </div>
                 <p className="text-[11px] text-muted-foreground">
-                  Supported formats: PDF, DOCX, CSV, XLSX, TXT (Max 50MB)
+                  Supported formats: PDF, DOCX, CSV, XLSX, TXT (Max 100MB)
                 </p>
               </div>
             )}
@@ -310,6 +310,7 @@ export function UploadModal({ isOpen, onClose, onSuccess }: UploadModalProps) {
                 className="w-full h-9 rounded-md border border-input bg-card px-3 text-xs text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
               >
                 <option value="research_paper">Academic Research Paper</option>
+                <option value="book">Academic Book / Textbook</option>
                 <option value="syllabus">Course Syllabus / Curriculum</option>
                 <option value="dataset">Statistical Education Dataset</option>
                 <option value="spreadsheet">Spreadsheet / Metric Table</option>
