@@ -5,9 +5,12 @@ Produces NormalizedDocument conforming to the RAG ingestion pipeline contract.
 """
 from __future__ import annotations
 
+import logging
 import re
 import time
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 from packages.ingestion.parsed_document import (
     NormalizedDocument,
@@ -20,6 +23,12 @@ from packages.ingestion.parsed_document import (
 from packages.ingestion.parsers.base import BaseParser
 
 _PDF_PARSER_VERSION = "1.0.0"
+
+try:
+    from rapidocr_onnxruntime import RapidOCR
+    _RAPIDOCR_AVAILABLE = True
+except ImportError:
+    _RAPIDOCR_AVAILABLE = False
 
 try:
     import pymupdf as fitz  # PyMuPDF
@@ -120,6 +129,59 @@ class PDFParser(BaseParser):
                         )
 
             doc.close()
+
+            # Fallback for scanned image PDFs with no extractable text layer
+            if not paragraphs and _RAPIDOCR_AVAILABLE:
+                logger.info(
+                    "PDF '%s' has no selectable text stream. Activating RapidOCR for scanned image pages...",
+                    file_path.name,
+                )
+                ocr = RapidOCR()
+                doc = fitz.open(str(file_path))
+                # For scanned books, OCR up to 25 foundational pages
+                max_ocr_pages = min(25, len(doc))
+                current_heading = "Overview"
+
+                for p_idx in range(max_ocr_pages):
+                    page = doc[p_idx]
+                    pix = page.get_pixmap(dpi=90)
+                    img_bytes = pix.tobytes("png")
+                    ocr_res, _ = ocr(img_bytes)
+                    if not ocr_res:
+                        continue
+
+                    page_lines = [l[1] for l in ocr_res if l and len(l) > 1 and l[1].strip()]
+                    if not page_lines:
+                        continue
+
+                    first_line = page_lines[0].strip()
+                    if len(first_line) < 70 and (
+                        re.match(r"^(chapter|preface|contents|introduction|\d+)", first_line, re.IGNORECASE)
+                        or first_line.isupper()
+                    ):
+                        headings.append(
+                            ParsedHeading(
+                                level=1,
+                                text=first_line,
+                                page=p_idx + 1,
+                                path=first_line,
+                            )
+                        )
+                        current_heading = first_line
+                        page_lines = page_lines[1:]
+
+                    if page_lines:
+                        page_text = "\n".join(page_lines)
+                        reading_order += 1
+                        paragraphs.append(
+                            ParsedParagraph(
+                                text=page_text,
+                                page=p_idx + 1,
+                                section_path=current_heading,
+                                reading_order=reading_order,
+                            )
+                        )
+                doc.close()
         elif _PYPDF_AVAILABLE:
             reader = pypdf.PdfReader(str(file_path))
             for page_idx, page in enumerate(reader.pages, 1):

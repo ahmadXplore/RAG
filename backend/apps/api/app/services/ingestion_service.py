@@ -187,7 +187,10 @@ async def process_ingestion_job(job_id: uuid.UUID) -> None:
             normalizer = DocumentNormalizer(target_tokens=500, overlap_tokens=60)
             sections, chunks = normalizer.normalize(parsed_doc, version.id)
             if not chunks:
-                raise ValueError("Unable to extract text or tabular chunks from the document.")
+                raise ValueError(
+                    "This document appears to be a scanned image PDF with no extractable text layer. "
+                    "Please upload a searchable text PDF or a document with selectable text."
+                )
 
             chunk_store = ChunkStore(session)
             await chunk_store.store(
