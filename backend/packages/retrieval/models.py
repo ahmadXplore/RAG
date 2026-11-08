@@ -43,6 +43,6 @@ class RetrievalConfig:
 
     dense_k: int = 20
     sparse_k: int = 20
-    fusion_k: int = 6
-    rerank_k: int = 5
+    fusion_k: int = 12
+    rerank_k: int = 6
     rrf_k: int = 60
