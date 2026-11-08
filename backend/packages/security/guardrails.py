@@ -3,6 +3,9 @@
 Enforces Rule 12 — AI/RAG Security:
 1. Input Guard: Lightweight regex & pattern classifier blocking users from typing
    known jailbreaks, prompt injection attempts, or sensitive keywords.
+   Applies NFKC Unicode normalization and strips zero-width/control characters
+   before matching to defeat homoglyph, RTL-override, and zero-width-space
+   obfuscation bypass attempts (Cloudflare WAF methodology).
 2. Output Guard: Deep inspection of LLM generated text before presentation to user.
    If restricted data (SSNs, API keys, private keys, credit cards, or banned keywords)
    is detected, blocks the response and replaces it with a generic security message.
@@ -12,6 +15,7 @@ from __future__ import annotations
 
 import logging
 import re
+import unicodedata
 from dataclasses import dataclass
 from typing import ClassVar
 
@@ -136,6 +140,41 @@ class InputGuard:
     ]
 
     @classmethod
+    def _normalize(cls, text: str) -> str:
+        """Normalize text to defeat obfuscation bypass attempts.
+
+        Applies the following canonicalization pipeline (Cloudflare WAF methodology):
+        1. NFKC Unicode normalization — collapses homoglyphs (Cyrillic ɪ → i,
+           fullwidth chars → ASCII, ligatures → letters, etc.).
+        2. Strip zero-width and invisible control characters (U+200B zero-width
+           space, U+00AD soft hyphen, U+FEFF BOM, U+200C/D/E/F, etc.).
+        3. Collapse non-breaking spaces (U+00A0) to regular ASCII spaces.
+        4. Strip RTL / LTR override markers (U+202A–U+202E, U+2066–U+2069).
+        """
+        # Step 1 — NFKC normalization (also decomposes fullwidth/halfwidth chars)
+        normalized = unicodedata.normalize("NFKC", text)
+
+        # Step 2 — strip invisible / zero-width / directional override chars
+        _STRIP_CATEGORIES = {"Cf"}  # Unicode "Format" category covers most of these
+        _STRIP_CODEPOINTS = {
+            "\u200b", "\u200c", "\u200d", "\u200e", "\u200f",  # zero-width chars
+            "\u00ad",  # soft hyphen
+            "\ufeff",  # BOM / zero-width no-break space
+            "\u2028", "\u2029",  # line/paragraph separators
+            "\u202a", "\u202b", "\u202c", "\u202d", "\u202e",  # BiDi overrides
+            "\u2066", "\u2067", "\u2068", "\u2069",  # BiDi isolates
+        }
+        cleaned = "".join(
+            ch for ch in normalized
+            if ch not in _STRIP_CODEPOINTS and unicodedata.category(ch) not in _STRIP_CATEGORIES
+        )
+
+        # Step 3 — collapse non-breaking spaces to regular spaces
+        cleaned = cleaned.replace("\u00a0", " ").replace("\u202f", " ").replace("\u3000", " ")
+
+        return cleaned
+
+    @classmethod
     def check(cls, text: str) -> tuple[bool, str | None, str | None]:
         """Check if an input message violates security guardrails.
 
@@ -147,7 +186,9 @@ class InputGuard:
         if not text or not isinstance(text, str):
             return True, None, None
 
-        cleaned = text.strip()
+        # Apply canonicalization pipeline before regex matching to defeat
+        # Unicode obfuscation, zero-width-space injection, and homoglyph attacks.
+        cleaned = cls._normalize(text.strip())
         for pattern, category in cls.JAILBREAK_PATTERNS:
             if pattern.search(cleaned):
                 logger.warning(
@@ -156,6 +197,7 @@ class InputGuard:
                         "event": "security_input_blocked",
                         "category": category,
                         "text_prefix": cleaned[:80],
+                        "raw_prefix": text.strip()[:80],
                     },
                 )
                 return False, category, cls.GENERIC_BLOCKED_MESSAGE

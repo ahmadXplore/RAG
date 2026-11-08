@@ -27,6 +27,7 @@ from apps.api.app.core.rate_limit import set_redis_pool
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from sqlalchemy.exc import SQLAlchemyError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
@@ -76,6 +77,11 @@ app = FastAPI(
     docs_url="/docs" if settings.APP_ENV != "production" else None,
     redoc_url="/redoc" if settings.APP_ENV != "production" else None,
     lifespan=lifespan,
+    # Bug fix: disable Starlette's automatic trailing-slash redirects.
+    # Without this, POST /api/v1/chat/ redirected to /api/v1/chat with HTTP 307
+    # BEFORE the require_viewer dependency ran, leaking endpoint existence and
+    # bypassing auth at the HTTP layer for clients that follow the redirect.
+    redirect_slashes=False,
 )
 
 # CORS — explicit allowlist; never use wildcard in production (Rule 7, Rule 4)
@@ -86,6 +92,24 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
     allow_headers=["Authorization", "Content-Type", "X-Request-ID"],
 )
+
+
+@app.middleware("http")
+async def body_size_limit_middleware(request: Request, call_next):
+    """Enforce a global request body size limit to prevent body-bomb DoS.
+
+    Cloudflare blocks payloads > 100MB by default; we enforce a tighter
+    10MB limit at the application layer for defense-in-depth.
+    Document uploads have their own 50MB check in the route handler.
+    """
+    _MAX_BODY_BYTES = 10 * 1024 * 1024  # 10 MB
+    content_length = request.headers.get("content-length")
+    if content_length and int(content_length) > _MAX_BODY_BYTES:
+        return JSONResponse(
+            status_code=413,
+            content={"error": {"code": "PAYLOAD_TOO_LARGE", "message": "Request body exceeds the 10 MB limit."}},
+        )
+    return await call_next(request)
 
 
 @app.middleware("http")

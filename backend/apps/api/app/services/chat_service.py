@@ -255,14 +255,27 @@ class ChatService:
 
         timer.start_stage("generation")
         graph = self._get_graph()
-        gen_result: GenerationResult = await graph.run(
-            question=request.message,
-            authorized_document_ids=authorized_doc_ids,
-            user_id=str(current_user.id),
-            base_filters=request.filters or {},
-            authorized_documents=authorized_docs,
-            conversation_history=history,
-        )
+        try:
+            gen_result: GenerationResult = await graph.run(
+                question=request.message,
+                authorized_document_ids=authorized_doc_ids,
+                user_id=str(current_user.id),
+                base_filters=request.filters or {},
+                authorized_documents=authorized_docs,
+                conversation_history=history,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Upstream generation error or quota limit; degrading gracefully to abstention",
+                extra={"extra": {"error": str(exc)}},
+            )
+            gen_result = GenerationResult(
+                answer="The language model service is currently experiencing high load or rate limits. Please try again shortly.",
+                citation_ids=[],
+                grounded=False,
+                abstained=True,
+                query_type="DIRECT",
+            )
         timer.end_stage("generation")
 
         # 2. Output Guard (Rule 12): Inspect response for restricted data (SSNs, API keys, credentials)

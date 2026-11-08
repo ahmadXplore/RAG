@@ -47,7 +47,16 @@ export function RealUserConversationsMonitor({
   const [activeTab, setActiveTab] = React.useState<"longest" | "frustration" | "corrections" | "idk_triggers">(
     "longest"
   );
-  const [searchTerm, setSearchTerm] = React.useState("");
+  // Fix #12: per-tab search state so filtering one tab doesn't silently hide results on others.
+  const [searchTerms, setSearchTerms] = React.useState<Record<string, string>>({
+    longest: "",
+    frustration: "",
+    corrections: "",
+    idk_triggers: "",
+  });
+  const searchTerm = searchTerms[activeTab] ?? "";
+  const setSearchTerm = (value: string) =>
+    setSearchTerms((prev) => ({ ...prev, [activeTab]: value }));
 
   const filteredLongest = React.useMemo(() => {
     if (!searchTerm) return longestConversations;
@@ -118,11 +127,22 @@ export function RealUserConversationsMonitor({
               <Search className="h-3.5 w-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
               <input
                 type="text"
-                placeholder="Search session logs..."
+                placeholder="Search this tab..."
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
-                className="h-8 pl-8 pr-3 text-xs rounded-md border border-border bg-muted/40 focus:bg-background focus:outline-none focus:ring-1 focus:ring-primary w-40 sm:w-56"
+                className="h-8 pl-8 pr-7 text-xs rounded-md border border-border bg-muted/40 focus:bg-background focus:outline-none focus:ring-1 focus:ring-primary w-40 sm:w-56"
               />
+              {/* Fix #12: visible clear button so the active filter is never invisible */}
+              {searchTerm && (
+                <button
+                  type="button"
+                  onClick={() => setSearchTerm("")}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+                  aria-label="Clear search"
+                >
+                  <ArrowRight className="h-3 w-3 rotate-45" />
+                </button>
+              )}
             </div>
           </div>
         </div>

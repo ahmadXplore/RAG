@@ -33,21 +33,25 @@ class SparseEmbedder(Protocol):
 class FastEmbedDenseEmbedder:
     """Dense embedding service using FastEmbed all-MiniLM-L6-v2 (384 dims)."""
 
+    _cached_model = None
+
     def __init__(self, model_name: str = "sentence-transformers/all-MiniLM-L6-v2") -> None:
         if not _FASTEMBED_AVAILABLE:
             raise RuntimeError("fastembed is required for FastEmbedDenseEmbedder")
         self.model_name = model_name
-        last_exc: Exception | None = None
-        for attempt in range(4):
-            try:
-                self._model = TextEmbedding(model_name=model_name)
-                break
-            except Exception as exc:
-                last_exc = exc
-                time.sleep(1.5 * (attempt + 1))
-        else:
-            if last_exc:
-                raise last_exc
+        if FastEmbedDenseEmbedder._cached_model is None:
+            last_exc: Exception | None = None
+            for attempt in range(4):
+                try:
+                    FastEmbedDenseEmbedder._cached_model = TextEmbedding(model_name=model_name)
+                    break
+                except Exception as exc:
+                    last_exc = exc
+                    time.sleep(1.5 * (attempt + 1))
+            else:
+                if last_exc:
+                    raise last_exc
+        self._model = FastEmbedDenseEmbedder._cached_model
         self._dim = 384
 
     @property

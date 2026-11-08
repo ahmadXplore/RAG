@@ -52,3 +52,19 @@ class UserStatusUpdate(BaseModel):
 class UserRoleUpdate(BaseModel):
     role: str = Field(..., description="Role to assign: ADMIN, ANALYST, VIEWER")
 
+
+class UserStats(BaseModel):
+    total_accounts: int
+    active_users: int
+    blocked_users: int
+    admin_users: int
+
+
+class PaginatedUserResponse(BaseModel):
+    items: list[UserRead]
+    total: int
+    page: int
+    page_size: int
+    pages: int
+    stats: UserStats
+

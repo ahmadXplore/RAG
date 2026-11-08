@@ -35,25 +35,57 @@ export default function ObservabilityPage() {
   const [analysis, setAnalysis] = React.useState<ConversationAnalysisResponse | null>(null);
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState<string | null>(null);
+  const [accessDenied, setAccessDenied] = React.useState(false);
+  // Fix #11: keep a ref to the active AbortController so we can cancel in-flight
+  // fetches before the next one fires (prevents stale-response races on 30s refresh).
+  const abortRef = React.useRef<AbortController | null>(null);
 
   const fetchMetrics = React.useCallback(async () => {
     if (typeof window !== "undefined" && !isAdmin()) {
       router.push("/dashboard");
       return;
     }
+    // Fix #11: abort any previous in-flight request before starting a new one.
+    if (abortRef.current) {
+      abortRef.current.abort();
+    }
+    const controller = new AbortController();
+    abortRef.current = controller;
+
     setLoading(true);
     setError(null);
+    setAccessDenied(false);
     try {
       const [resMetrics, resAnalysis] = await Promise.all([
-        adminApi.observability(),
-        adminApi.conversationAnalysis().catch(() => null),
+        adminApi.observability({ signal: controller.signal }),
+        adminApi.conversationAnalysis({ signal: controller.signal }).catch((err: unknown) => {
+          if (controller.signal.aborted || (err instanceof Error && err.name === "AbortError")) return null;
+          // Fix #1: distinguish 403 Access Denied from generic network errors.
+          if (err && typeof err === "object" && "status" in err && (err as { status: number }).status === 403) {
+            setAccessDenied(true);
+          }
+          return null;
+        }),
       ]);
+      // Don't apply stale results if this request was cancelled
+      if (controller.signal.aborted) return;
       setData(resMetrics);
       if (resAnalysis) setAnalysis(resAnalysis);
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Failed to load observability telemetry");
+      if (controller.signal.aborted || (err instanceof Error && err.name === "AbortError")) return; // silently drop aborted fetches
+      // Fix #4: on 401 redirect to login
+      if (err && typeof err === "object" && "status" in err && (err as { status: number }).status === 401) {
+        router.push("/login?from=/admin/observability");
+        return;
+      }
+      // Fix #1: show explicit Access Denied state instead of a generic error
+      if (err && typeof err === "object" && "status" in err && (err as { status: number }).status === 403) {
+        setAccessDenied(true);
+      } else {
+        setError(err instanceof Error ? err.message : "Failed to load observability telemetry");
+      }
     } finally {
-      setLoading(false);
+      if (!controller.signal.aborted) setLoading(false);
     }
   }, [router]);
 
@@ -61,7 +93,10 @@ export default function ObservabilityPage() {
     fetchMetrics();
     // Auto-refresh metrics every 30 seconds
     const interval = setInterval(fetchMetrics, 30000);
-    return () => clearInterval(interval);
+    return () => {
+      clearInterval(interval);
+      if (abortRef.current) abortRef.current.abort();
+    };
   }, [fetchMetrics]);
 
   return (
@@ -80,10 +115,27 @@ export default function ObservabilityPage() {
           </div>
 
           <div className="flex items-center gap-2">
-            <Badge variant="outline" className="border-emerald-500/40 text-emerald-700 dark:text-emerald-400 gap-1.5 py-1 text-xs">
-              <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
-              Production Cluster: Healthy
-            </Badge>
+            {accessDenied ? (
+              <Badge variant="outline" className="border-amber-500/40 text-amber-700 dark:text-amber-400 gap-1.5 py-1 text-xs">
+                <span className="h-2 w-2 rounded-full bg-amber-500" />
+                Cluster Access: Denied
+              </Badge>
+            ) : error ? (
+              <Badge variant="outline" className="border-destructive/40 text-destructive gap-1.5 py-1 text-xs">
+                <span className="h-2 w-2 rounded-full bg-destructive" />
+                Cluster State: Unreachable
+              </Badge>
+            ) : loading && !data ? (
+              <Badge variant="outline" className="border-border text-muted-foreground gap-1.5 py-1 text-xs">
+                <span className="h-2 w-2 rounded-full bg-muted-foreground animate-pulse" />
+                Cluster State: Connecting...
+              </Badge>
+            ) : (
+              <Badge variant="outline" className="border-emerald-500/40 text-emerald-700 dark:text-emerald-400 gap-1.5 py-1 text-xs">
+                <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
+                Production Cluster: Healthy
+              </Badge>
+            )}
             <Button
               variant="outline"
               size="sm"
@@ -102,6 +154,15 @@ export default function ObservabilityPage() {
             <Spinner className="h-8 w-8" />
             <span className="text-xs text-muted-foreground">Loading observability telemetry...</span>
           </div>
+        ) : accessDenied ? (
+          // Fix #1: explicit Access Denied state — the real wall is the backend 403.
+          <div className="py-24 flex flex-col items-center justify-center gap-3 text-center">
+            <ShieldCheck className="h-10 w-10 text-destructive opacity-60" />
+            <p className="text-sm font-semibold text-foreground">Access Denied</p>
+            <p className="text-xs text-muted-foreground max-w-sm">
+              Your account does not have admin privileges. This page requires an admin-role JWT issued by the server.
+            </p>
+          </div>
         ) : error ? (
           <ErrorState message={error} onRetry={fetchMetrics} />
         ) : data ? (
@@ -112,8 +173,14 @@ export default function ObservabilityPage() {
               <Card className="border-border bg-card shadow-xs p-4 space-y-2">
                 <div className="flex items-center justify-between text-xs text-muted-foreground">
                   <span className="font-medium">Total Token Usage</span>
-                  <div className="p-1.5 rounded-md bg-primary/10 text-primary">
-                    <Coins className="h-4 w-4" />
+                  <div className="flex items-center gap-1.5">
+                    {/* Fix #7: show Estimated disclaimer when backend signals derived values */}
+                    {(data.tokens as { is_estimated?: boolean }).is_estimated && (
+                      <Badge variant="outline" className="border-amber-400/50 text-amber-600 dark:text-amber-400 text-[9px] py-0 px-1">Estimated</Badge>
+                    )}
+                    <div className="p-1.5 rounded-md bg-primary/10 text-primary">
+                      <Coins className="h-4 w-4" />
+                    </div>
                   </div>
                 </div>
                 <div>
@@ -136,8 +203,14 @@ export default function ObservabilityPage() {
               <Card className="border-border bg-card shadow-xs p-4 space-y-2">
                 <div className="flex items-center justify-between text-xs text-muted-foreground">
                   <span className="font-medium">Average Latency (E2E)</span>
-                  <div className="p-1.5 rounded-md bg-amber-500/10 text-amber-600 dark:text-amber-400">
-                    <Clock className="h-4 w-4" />
+                  <div className="flex items-center gap-1.5">
+                    {/* Fix #8: show Baseline disclaimer when backend signals static values */}
+                    {(data.latencies as { is_static_baseline?: boolean }).is_static_baseline && (
+                      <Badge variant="outline" className="border-sky-400/50 text-sky-600 dark:text-sky-400 text-[9px] py-0 px-1">Baseline</Badge>
+                    )}
+                    <div className="p-1.5 rounded-md bg-amber-500/10 text-amber-600 dark:text-amber-400">
+                      <Clock className="h-4 w-4" />
+                    </div>
                   </div>
                 </div>
                 <div>
@@ -246,8 +319,9 @@ export default function ObservabilityPage() {
                   </Badge>
                 </div>
                 <div className="flex items-baseline gap-3">
+                  {/* Fix #14: idk_rate is now single source of truth in idk_metrics.idk_rate */}
                   <div className="text-2xl font-bold font-mono text-foreground">
-                    {analysis?.summary?.idk_rate ?? 0}%
+                    {analysis?.idk_metrics?.idk_rate ?? 0}%
                   </div>
                   <span className="text-xs text-muted-foreground">
                     Triggered &ldquo;I cannot find that in the provided documentation&rdquo;
@@ -278,32 +352,38 @@ export default function ObservabilityPage() {
                   </CardTitle>
                 </CardHeader>
                 <CardContent className="p-5 space-y-4">
-                  {Object.entries(data.latencies.stage_breakdown).map(([stage, ms]) => {
-                    const percent = Math.min(100, Math.round((ms / data.latencies.avg_total_ms) * 100));
-                    const stageLabel = stage.replace("_ms", "").replace(/_/g, " ").toUpperCase();
-                    return (
-                      <div key={stage} className="space-y-1.5">
-                        <div className="flex items-center justify-between text-xs">
-                          <span className="font-medium text-foreground">{stageLabel}</span>
-                          <span className="font-mono text-muted-foreground font-semibold">
-                            {ms} ms ({percent}%)
-                          </span>
+                  {/* Fix #6: normalize bars against the SUM of all rendered stage values,
+                      not avg_total_ms alone, so bars are proportionally correct and sum to 100%. */}
+                  {(() => {
+                    const stageEntries = Object.entries(data.latencies.stage_breakdown);
+                    const stageSum = stageEntries.reduce((acc, [, ms]) => acc + (ms as number), 0) || 1;
+                    return stageEntries.map(([stage, ms]) => {
+                      const percent = Math.min(100, Math.round(((ms as number) / stageSum) * 100));
+                      const stageLabel = stage.replace("_ms", "").replace(/_/g, " ").toUpperCase();
+                      return (
+                        <div key={stage} className="space-y-1.5">
+                          <div className="flex items-center justify-between text-xs">
+                            <span className="font-medium text-foreground">{stageLabel}</span>
+                            <span className="font-mono text-muted-foreground font-semibold">
+                              {ms as number} ms ({percent}%)
+                            </span>
+                          </div>
+                          <div className="w-full h-2 rounded-full bg-muted overflow-hidden">
+                            <div
+                              className={`h-full rounded-full transition-all duration-500 ${
+                                percent > 50
+                                  ? "bg-primary"
+                                  : percent > 20
+                                  ? "bg-emerald-500"
+                                  : "bg-sky-500"
+                              }`}
+                              style={{ width: `${percent}%` }}
+                            />
+                          </div>
                         </div>
-                        <div className="w-full h-2 rounded-full bg-muted overflow-hidden">
-                          <div
-                            className={`h-full rounded-full transition-all duration-500 ${
-                              percent > 50
-                                ? "bg-primary"
-                                : percent > 20
-                                ? "bg-emerald-500"
-                                : "bg-sky-500"
-                            }`}
-                            style={{ width: `${percent}%` }}
-                          />
-                        </div>
-                      </div>
-                    );
-                  })}
+                      );
+                    });
+                  })()}
                 </CardContent>
               </Card>
 

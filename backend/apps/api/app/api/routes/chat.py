@@ -9,14 +9,14 @@ Rule 24: Business logic delegates entirely to ChatService.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from apps.api.app.api.deps import get_session, require_viewer
 from apps.api.app.core.rate_limit import rate_limit_chat
 from apps.api.app.models.user import User
 from apps.api.app.schemas.chat import ChatRequest, ChatResponse
 from apps.api.app.services.chat_service import ChatService
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Query, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -81,8 +81,8 @@ import uuid
     summary="List past conversations for current user",
 )
 async def list_conversations(
-    limit: int = 50,
-    offset: int = 0,
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
     current_user: User = Depends(require_viewer),
     session: AsyncSession = Depends(get_session),
 ) -> list[ConversationRead]:
@@ -121,7 +121,7 @@ async def delete_conversation(
 
 from apps.api.app.models.audit import AuditLog
 from apps.api.app.repositories.audit_repo import AuditLogRepository
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class CitationClickRequest(BaseModel):
@@ -170,12 +170,15 @@ async def track_citation_click(
 
 
 class ChatFeedbackRequest(BaseModel):
-    message_id: str
-    conversation_id: str | None = None
-    rating: str  # "thumbs_up" | "thumbs_down"
-    feedback_text: str | None = None  # user input in correction UI: "What was missing or incorrect?"
-    tags: list[str] | None = None  # e.g., ["Missing facts", "Incorrect calculations", "Outdated data"]
-    user_query: str | None = None
+    message_id: str = Field(..., max_length=100)
+    conversation_id: str | None = Field(default=None, max_length=100)
+    # Fix #3: Literal enum — rejects any value other than these two at the Pydantic layer (422).
+    rating: Literal["thumbs_up", "thumbs_down"]
+    feedback_text: str | None = Field(default=None, max_length=2000)  # user input in correction UI
+    # Fix #5: Cap tags array length to 20 and sanitize strings
+    tags: list[str] | None = Field(default=None, max_length=20)
+    # Fix #7: Cap user_query length to 2000 chars to prevent unbounded DB storage
+    user_query: str | None = Field(default=None, max_length=2000)
 
 
 @router.post(
@@ -199,6 +202,19 @@ async def submit_chat_feedback(
     except (ValueError, TypeError):
         pass
 
+    # Fix #5: sanitize tags to at most 20 elements, each max 100 chars
+    sanitized_tags = [
+        str(t)[:100].strip()
+        for t in (payload.tags or [])[:20]
+        if isinstance(t, str) and t.strip()
+    ]
+    # Fix #7: sanitize and cap user_query to 2000 chars
+    sanitized_query = (
+        payload.user_query[:2000].strip()
+        if isinstance(payload.user_query, str) and payload.user_query.strip()
+        else None
+    )
+
     log_entry = AuditLog(
         id=uuid.uuid4(),
         user_id=current_user.id,
@@ -210,9 +226,10 @@ async def submit_chat_feedback(
             "conversation_id": payload.conversation_id,
             "rating": payload.rating,
             "score": 1 if payload.rating == "thumbs_up" else -1,
-            "feedback_text": payload.feedback_text.strip() if payload.feedback_text else None,
-            "tags": payload.tags or [],
-            "user_query": payload.user_query,
+            # Fix #13: guard against non-string type before calling .strip()
+            "feedback_text": payload.feedback_text.strip() if isinstance(payload.feedback_text, str) and payload.feedback_text else None,
+            "tags": sanitized_tags,
+            "user_query": sanitized_query,
         },
     )
     session.add(log_entry)
@@ -246,13 +263,19 @@ async def get_message_feedback(
     except (ValueError, TypeError):
         pass
 
+    # Fix #4: push resource_id filter to the DB when UUID is parseable — avoids full-table scan.
+    where_clauses = [
+        AuditLog.user_id == current_user.id,
+        AuditLog.action == "user_feedback",
+    ]
+    if msg_uuid:
+        where_clauses.append(AuditLog.resource_id == msg_uuid)
+
     query = (
         select(AuditLog)
-        .where(
-            AuditLog.user_id == current_user.id,
-            AuditLog.action == "user_feedback",
-        )
+        .where(*where_clauses)
         .order_by(AuditLog.created_at.desc())
+        .limit(100)  # safety cap: even without UUID match we don't scan unbounded
     )
     res = await session.execute(query)
     logs = res.scalars().all()
@@ -282,6 +305,9 @@ async def get_conversation_feedback(
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
     """Retrieve feedback mapping { message_id: feedback_data } for a conversation."""
+    # Fix #5: add a hard row-count cap so we never scan the full audit log table.
+    # conversation_id lives in metadata_ JSON so final filtering remains in Python,
+    # but we cap at 500 rows to prevent OOM under load.
     query = (
         select(AuditLog)
         .where(
@@ -289,6 +315,7 @@ async def get_conversation_feedback(
             AuditLog.action == "user_feedback",
         )
         .order_by(AuditLog.created_at.asc())
+        .limit(500)
     )
     res = await session.execute(query)
     logs = res.scalars().all()

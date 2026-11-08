@@ -17,6 +17,8 @@ import {
   Lock,
   UserCheck,
   Check,
+  ChevronLeft,
+  ChevronRight,
 } from "lucide-react";
 import { AppShell } from "@/components/layout/app-shell";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
@@ -24,20 +26,42 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Spinner, ErrorState, EmptyState } from "@/components/ui/states";
-import { usersApi, AdminUserItem } from "@/lib/api";
+import { usersApi, AdminUserItem, UserStats } from "@/lib/api";
 import { getUser } from "@/lib/auth";
 import { useModal } from "@/components/ui/modal-context";
 
 export default function AdminUsersPage() {
   const modal = useModal();
   const [users, setUsers] = React.useState<AdminUserItem[]>([]);
+  const [stats, setStats] = React.useState<UserStats>({
+    total_accounts: 0,
+    active_users: 0,
+    blocked_users: 0,
+    admin_users: 0,
+  });
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState<string | null>(null);
 
+  // Pagination
+  const [page, setPage] = React.useState(1);
+  const [pageSize, setPageSize] = React.useState(25);
+  const [totalPages, setTotalPages] = React.useState(1);
+  const [totalCount, setTotalCount] = React.useState(0);
+
   // Filters & Search
   const [searchQuery, setSearchQuery] = React.useState("");
+  const [debouncedSearch, setDebouncedSearch] = React.useState("");
   const [roleFilter, setRoleFilter] = React.useState<string>("all");
   const [statusFilter, setStatusFilter] = React.useState<string>("all");
+
+  // Debounce search query
+  React.useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearch(searchQuery);
+      setPage(1);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
 
   // Add User Modal State
   const [isAddModalOpen, setIsAddModalOpen] = React.useState(false);
@@ -57,14 +81,23 @@ export default function AdminUsersPage() {
     setLoading(true);
     setError(null);
     try {
-      const data = await usersApi.list();
-      setUsers(data);
+      const res = await usersApi.list({
+        search: debouncedSearch.trim() || undefined,
+        role: roleFilter,
+        status: statusFilter,
+        page,
+        page_size: pageSize,
+      });
+      setUsers(res.items);
+      setTotalCount(res.total);
+      setTotalPages(res.pages || 1);
+      setStats(res.stats);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Failed to load user accounts");
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [debouncedSearch, roleFilter, statusFilter, page, pageSize]);
 
   React.useEffect(() => {
     fetchUsers();
@@ -197,32 +230,6 @@ export default function AdminUsersPage() {
     }
   };
 
-  // Filtered list
-  const filteredUsers = React.useMemo(() => {
-    return users.filter((u) => {
-      const matchesSearch =
-        (u.full_name || "").toLowerCase().includes(searchQuery.toLowerCase()) ||
-        u.email.toLowerCase().includes(searchQuery.toLowerCase());
-
-      const userRoleNames = u.roles.map((r) => r.name.toUpperCase());
-      const matchesRole =
-        roleFilter === "all" || userRoleNames.includes(roleFilter.toUpperCase());
-
-      const matchesStatus =
-        statusFilter === "all" ||
-        (statusFilter === "active" && u.is_active) ||
-        (statusFilter === "blocked" && !u.is_active);
-
-      return matchesSearch && matchesRole && matchesStatus;
-    });
-  }, [users, searchQuery, roleFilter, statusFilter]);
-
-  const activeCount = users.filter((u) => u.is_active).length;
-  const blockedCount = users.filter((u) => !u.is_active).length;
-  const adminCount = users.filter((u) =>
-    u.roles.some((r) => r.name.toLowerCase() === "admin")
-  ).length;
-
   return (
     <AppShell>
       <div className="p-6 max-w-6xl mx-auto space-y-6">
@@ -261,27 +268,33 @@ export default function AdminUsersPage() {
             <div className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">
               Total Accounts
             </div>
-            <div className="text-2xl font-bold text-foreground mt-1">{users.length}</div>
+            <div className="text-2xl font-bold text-foreground mt-1">
+              {stats.total_accounts.toLocaleString()}
+            </div>
           </Card>
           <Card className="p-3.5 border-border bg-card">
             <div className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider flex items-center gap-1.5">
               <ShieldCheck className="h-3.5 w-3.5 text-emerald-500" /> Active Users
             </div>
             <div className="text-2xl font-bold text-emerald-600 dark:text-emerald-400 mt-1">
-              {activeCount}
+              {stats.active_users.toLocaleString()}
             </div>
           </Card>
           <Card className="p-3.5 border-border bg-card">
             <div className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider flex items-center gap-1.5">
               <ShieldAlert className="h-3.5 w-3.5 text-destructive" /> Blocked Users
             </div>
-            <div className="text-2xl font-bold text-destructive mt-1">{blockedCount}</div>
+            <div className="text-2xl font-bold text-destructive mt-1">
+              {stats.blocked_users.toLocaleString()}
+            </div>
           </Card>
           <Card className="p-3.5 border-border bg-card">
             <div className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider flex items-center gap-1.5">
               <Shield className="h-3.5 w-3.5 text-primary" /> Administrators
             </div>
-            <div className="text-2xl font-bold text-primary mt-1">{adminCount}</div>
+            <div className="text-2xl font-bold text-primary mt-1">
+              {stats.admin_users.toLocaleString()}
+            </div>
           </Card>
         </div>
 
@@ -302,7 +315,10 @@ export default function AdminUsersPage() {
               <span>Role:</span>
               <select
                 value={roleFilter}
-                onChange={(e) => setRoleFilter(e.target.value)}
+                onChange={(e) => {
+                  setRoleFilter(e.target.value);
+                  setPage(1);
+                }}
                 className="h-8 rounded-md border border-input bg-background px-2 text-xs focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
               >
                 <option value="all">All Roles</option>
@@ -316,12 +332,31 @@ export default function AdminUsersPage() {
               <span>Status:</span>
               <select
                 value={statusFilter}
-                onChange={(e) => setStatusFilter(e.target.value)}
+                onChange={(e) => {
+                  setStatusFilter(e.target.value);
+                  setPage(1);
+                }}
                 className="h-8 rounded-md border border-input bg-background px-2 text-xs focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
               >
                 <option value="all">All Statuses</option>
                 <option value="active">Active Only</option>
                 <option value="blocked">Blocked Only</option>
+              </select>
+            </div>
+
+            <div className="flex items-center gap-1 text-xs text-muted-foreground ml-1">
+              <span>Per page:</span>
+              <select
+                value={pageSize}
+                onChange={(e) => {
+                  setPageSize(Number(e.target.value));
+                  setPage(1);
+                }}
+                className="h-8 rounded-md border border-input bg-background px-2 text-xs focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              >
+                <option value={25}>25</option>
+                <option value={50}>50</option>
+                <option value={100}>100</option>
               </select>
             </div>
           </div>
@@ -333,7 +368,7 @@ export default function AdminUsersPage() {
             <div className="flex items-center justify-between">
               <CardTitle className="text-sm font-semibold">Registered Accounts</CardTitle>
               <span className="text-xs text-muted-foreground font-mono">
-                Showing {filteredUsers.length} of {users.length} accounts
+                Showing {users.length > 0 ? (page - 1) * pageSize + 1 : 0}–{Math.min(page * pageSize, totalCount)} of {totalCount.toLocaleString()} accounts
               </span>
             </div>
           </CardHeader>
@@ -346,7 +381,7 @@ export default function AdminUsersPage() {
               <div className="p-6">
                 <ErrorState message={error} onRetry={fetchUsers} />
               </div>
-            ) : filteredUsers.length === 0 ? (
+            ) : users.length === 0 ? (
               <div className="p-6">
                 <EmptyState
                   title="No users match criteria"
@@ -354,128 +389,189 @@ export default function AdminUsersPage() {
                 />
               </div>
             ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-left text-xs">
-                  <thead className="bg-muted/70 border-b border-border text-muted-foreground uppercase font-semibold">
-                    <tr>
-                      <th scope="col" className="px-4 py-3">User</th>
-                      <th scope="col" className="px-4 py-3">Email Address</th>
-                      <th scope="col" className="px-4 py-3">Assigned Role</th>
-                      <th scope="col" className="px-4 py-3">Account Status</th>
-                      <th scope="col" className="px-4 py-3">Created</th>
-                      <th scope="col" className="px-4 py-3 text-right">Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-border">
-                    {filteredUsers.map((u) => {
-                      const isSelf = currentUser?.id === u.id || currentUser?.email === u.email;
-                      const isUpdating = updatingUserId === u.id;
-                      const primaryRole = u.roles[0]?.name?.toUpperCase() || "VIEWER";
+              <>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs">
+                    <thead className="bg-muted/70 border-b border-border text-muted-foreground uppercase font-semibold">
+                      <tr>
+                        <th scope="col" className="px-4 py-3">User</th>
+                        <th scope="col" className="px-4 py-3">Email Address</th>
+                        <th scope="col" className="px-4 py-3">Assigned Role</th>
+                        <th scope="col" className="px-4 py-3">Account Status</th>
+                        <th scope="col" className="px-4 py-3">Created</th>
+                        <th scope="col" className="px-4 py-3 text-right">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-border">
+                      {users.map((u) => {
+                        const isSelf = currentUser?.id === u.id || currentUser?.email === u.email;
+                        const isUpdating = updatingUserId === u.id;
+                        const primaryRole = u.roles[0]?.name?.toUpperCase() || "VIEWER";
 
-                      return (
-                        <tr key={u.id} className="hover:bg-accent/30 transition-colors">
-                          <td className="px-4 py-3.5 font-medium text-foreground">
-                            <div className="flex items-center gap-2.5">
-                              <div className="h-7 w-7 rounded-full bg-primary/10 text-primary font-bold flex items-center justify-center text-xs shrink-0 border border-primary/20">
-                                {(u.full_name || u.email).slice(0, 1).toUpperCase()}
-                              </div>
-                              <div className="min-w-0">
-                                <div className="font-semibold text-foreground flex items-center gap-1.5">
-                                  <span className="truncate">{u.full_name || "—"}</span>
-                                  {isSelf && (
-                                    <Badge variant="secondary" className="text-[10px] py-0 px-1.5 font-mono">
-                                      You
-                                    </Badge>
-                                  )}
+                        return (
+                          <tr key={u.id} className="hover:bg-accent/30 transition-colors">
+                            <td className="px-4 py-3.5 font-medium text-foreground">
+                              <div className="flex items-center gap-2.5">
+                                <div className="h-7 w-7 rounded-full bg-primary/10 text-primary font-bold flex items-center justify-center text-xs shrink-0 border border-primary/20">
+                                  {(u.full_name || u.email).slice(0, 1).toUpperCase()}
+                                </div>
+                                <div className="min-w-0">
+                                  <div className="font-semibold text-foreground flex items-center gap-1.5">
+                                    <span className="truncate">{u.full_name || "—"}</span>
+                                    {isSelf && (
+                                      <Badge variant="secondary" className="text-[10px] py-0 px-1.5 font-mono">
+                                        You
+                                      </Badge>
+                                    )}
+                                  </div>
                                 </div>
                               </div>
-                            </div>
-                          </td>
-                          <td className="px-4 py-3.5 font-mono text-muted-foreground">{u.email}</td>
-                          <td className="px-4 py-3.5">
-                            {isSelf ? (
-                              <Badge variant="default" className="text-[10px] uppercase font-mono">
-                                {primaryRole}
-                              </Badge>
-                            ) : (
-                              <select
-                                value={primaryRole}
-                                onChange={(e) => handleRoleChange(u, e.target.value)}
-                                className="h-6 rounded border border-border bg-card px-1.5 text-[11px] font-mono uppercase focus-visible:outline-none"
-                              >
-                                <option value="ADMIN">ADMIN</option>
-                                <option value="ANALYST">ANALYST</option>
-                                <option value="VIEWER">VIEWER</option>
-                              </select>
-                            )}
-                          </td>
-                          <td className="px-4 py-3.5">
-                            <Badge
-                              variant={u.is_active ? "success" : "destructive"}
-                              className="capitalize gap-1 text-[11px]"
-                            >
-                              {u.is_active ? (
-                                <>
-                                  <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
-                                  Active
-                                </>
+                            </td>
+                            <td className="px-4 py-3.5 font-mono text-muted-foreground">{u.email}</td>
+                            <td className="px-4 py-3.5">
+                              {isSelf ? (
+                                <Badge variant="default" className="text-[10px] uppercase font-mono">
+                                  {primaryRole}
+                                </Badge>
                               ) : (
-                                <>
-                                  <span className="h-1.5 w-1.5 rounded-full bg-destructive" />
-                                  Blocked
-                                </>
+                                <select
+                                  value={primaryRole}
+                                  onChange={(e) => handleRoleChange(u, e.target.value)}
+                                  className="h-6 rounded border border-border bg-card px-1.5 text-[11px] font-mono uppercase focus-visible:outline-none"
+                                >
+                                  <option value="ADMIN">ADMIN</option>
+                                  <option value="ANALYST">ANALYST</option>
+                                  <option value="VIEWER">VIEWER</option>
+                                </select>
                               )}
-                            </Badge>
-                          </td>
-                          <td className="px-4 py-3.5 text-muted-foreground font-mono text-[11px]">
-                            {new Date(u.created_at).toLocaleDateString()}
-                          </td>
-                          <td className="px-4 py-3.5 text-right space-x-1.5">
-                            {/* Block / Reinstate Action */}
-                            {u.is_active ? (
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                disabled={isSelf || isUpdating}
-                                onClick={() => handleToggleStatus(u)}
-                                className="h-7 text-xs px-2 text-destructive hover:bg-destructive/10 hover:text-destructive border-border"
-                                title={isSelf ? "You cannot block yourself" : "Block user access"}
+                            </td>
+                            <td className="px-4 py-3.5">
+                              <Badge
+                                variant={u.is_active ? "success" : "destructive"}
+                                className="capitalize gap-1 text-[11px]"
                               >
-                                <Ban className="h-3 w-3 mr-1" />
-                                <span>Block</span>
-                              </Button>
-                            ) : (
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                disabled={isUpdating}
-                                onClick={() => handleToggleStatus(u)}
-                                className="h-7 text-xs px-2 text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-950/30 border-emerald-500/30"
-                                title="Reinstate user access"
-                              >
-                                <Check className="h-3 w-3 mr-1" />
-                                <span>Reinstate</span>
-                              </Button>
-                            )}
+                                {u.is_active ? (
+                                  <>
+                                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+                                    Active
+                                  </>
+                                ) : (
+                                  <>
+                                    <span className="h-1.5 w-1.5 rounded-full bg-destructive" />
+                                    Blocked
+                                  </>
+                                )}
+                              </Badge>
+                            </td>
+                            <td className="px-4 py-3.5 text-muted-foreground font-mono text-[11px]">
+                              {new Date(u.created_at).toLocaleDateString()}
+                            </td>
+                            <td className="px-4 py-3.5 text-right space-x-1.5">
+                              {/* Block / Reinstate Action */}
+                              {u.is_active ? (
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  disabled={isSelf || isUpdating}
+                                  onClick={() => handleToggleStatus(u)}
+                                  className="h-7 text-xs px-2 text-destructive hover:bg-destructive/10 hover:text-destructive border-border"
+                                  title={isSelf ? "You cannot block yourself" : "Block user access"}
+                                >
+                                  <Ban className="h-3 w-3 mr-1" />
+                                  <span>Block</span>
+                                </Button>
+                              ) : (
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  disabled={isUpdating}
+                                  onClick={() => handleToggleStatus(u)}
+                                  className="h-7 text-xs px-2 text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-950/30 border-emerald-500/30"
+                                  title="Reinstate user access"
+                                >
+                                  <Check className="h-3 w-3 mr-1" />
+                                  <span>Reinstate</span>
+                                </Button>
+                              )}
 
-                            {/* Delete Action */}
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              disabled={isSelf}
-                              onClick={() => handleDeleteUser(u)}
-                              className="h-7 text-xs px-2 text-muted-foreground hover:text-destructive hover:bg-destructive/10"
-                              title={isSelf ? "You cannot delete yourself" : "Permanently delete account"}
-                            >
-                              <Trash2 className="h-3.5 w-3.5" />
-                            </Button>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
+                              {/* Delete Action */}
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                disabled={isSelf}
+                                onClick={() => handleDeleteUser(u)}
+                                className="h-7 text-xs px-2 text-muted-foreground hover:text-destructive hover:bg-destructive/10"
+                                title={isSelf ? "You cannot delete yourself" : "Permanently delete account"}
+                              >
+                                <Trash2 className="h-3.5 w-3.5" />
+                              </Button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* Pagination Controls */}
+                <div className="flex items-center justify-between px-4 py-3 border-t border-border bg-muted/20">
+                  <div className="text-xs text-muted-foreground">
+                    Page <span className="font-semibold text-foreground">{page}</span> of{" "}
+                    <span className="font-semibold text-foreground">{totalPages}</span>
+                  </div>
+
+                  <div className="flex items-center gap-1.5">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={page <= 1 || loading}
+                      onClick={() => setPage((p) => Math.max(1, p - 1))}
+                      className="h-7 px-2.5 text-xs gap-1"
+                    >
+                      <ChevronLeft className="h-3.5 w-3.5" />
+                      Previous
+                    </Button>
+
+                    <div className="flex items-center gap-1 px-1">
+                      {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+                        let pageNum = i + 1;
+                        if (totalPages > 5) {
+                          if (page <= 3) {
+                            pageNum = i + 1;
+                          } else if (page >= totalPages - 2) {
+                            pageNum = totalPages - 4 + i;
+                          } else {
+                            pageNum = page - 2 + i;
+                          }
+                        }
+                        return (
+                          <Button
+                            key={pageNum}
+                            variant={page === pageNum ? "default" : "outline"}
+                            size="sm"
+                            disabled={loading}
+                            onClick={() => setPage(pageNum)}
+                            className="h-7 w-7 p-0 text-xs font-mono"
+                          >
+                            {pageNum}
+                          </Button>
+                        );
+                      })}
+                    </div>
+
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={page >= totalPages || loading}
+                      onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                      className="h-7 px-2.5 text-xs gap-1"
+                    >
+                      Next
+                      <ChevronRight className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
+                </div>
+              </>
             )}
           </CardContent>
         </Card>

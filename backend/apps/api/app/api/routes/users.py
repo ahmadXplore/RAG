@@ -11,11 +11,13 @@ from apps.api.app.models.user import User
 from apps.api.app.repositories.user_repo import UserRepository
 from apps.api.app.schemas.user import (
     AdminUserCreate,
+    PaginatedUserResponse,
     UserRead,
     UserRoleUpdate,
+    UserStats,
     UserStatusUpdate,
 )
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 router = APIRouter()
@@ -23,22 +25,42 @@ router = APIRouter()
 
 @router.get(
     "",
-    response_model=list[UserRead],
+    response_model=PaginatedUserResponse,
     status_code=status.HTTP_200_OK,
-    summary="List all users (Admin only)",
+    summary="List users with pagination, filters, and global metrics (Admin only)",
 )
 async def list_users(
     request: Request,
+    search: str | None = Query(None, description="Filter by name or email"),
+    role: str | None = Query(None, description="Filter by role: ADMIN, ANALYST, VIEWER"),
+    status_filter: str | None = Query(None, alias="status", description="Filter by status: active, blocked, all"),
+    page: int = Query(1, ge=1, description="Page number (1-indexed)"),
+    page_size: int = Query(50, ge=1, le=100, description="Items per page"),
     admin_user: User = Depends(require_admin),
     session: AsyncSession = Depends(get_session),
-) -> list[UserRead]:
-    """List all registered users.
-
-    Rule 4 & 11: Restricted strictly to ADMIN role.
-    Audit logs the privileged access.
-    """
+) -> PaginatedUserResponse:
+    """List registered users with pagination, full-text search, role filters, and global metrics."""
     user_repo = UserRepository(session)
-    users = await user_repo.list_all(limit=100)
+
+    is_active_val: bool | None = None
+    if status_filter:
+        s_lower = status_filter.lower().strip()
+        if s_lower == "active":
+            is_active_val = True
+        elif s_lower == "blocked":
+            is_active_val = False
+
+    offset = (page - 1) * page_size
+    users, total = await user_repo.list_paginated(
+        search=search,
+        role=role,
+        is_active=is_active_val,
+        limit=page_size,
+        offset=offset,
+    )
+
+    stats = await user_repo.get_global_stats()
+    pages = (total + page_size - 1) // page_size if total > 0 else 0
 
     # Audit log the administrative user list inspection
     await record_audit_log(
@@ -47,11 +69,18 @@ async def list_users(
         resource_type="user",
         user_id=admin_user.id,
         client_ip=get_client_ip(request),
-        metadata={"count": len(users)},
+        metadata={"count": len(users), "total": total, "page": page},
     )
     await session.commit()
 
-    return [UserRead.model_validate(u) for u in users]
+    return PaginatedUserResponse(
+        items=[UserRead.model_validate(u) for u in users],
+        total=total,
+        page=page,
+        page_size=page_size,
+        pages=pages,
+        stats=UserStats(**stats),
+    )
 
 
 @router.post(

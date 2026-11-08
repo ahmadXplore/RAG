@@ -89,3 +89,10 @@ logs/
 *.db
 *.sqlite
 *.sqlite3
+
+# SQLite WAL sidecar files
+*.db-shm
+*.db-wal
+
+# Scratch / temp files
+scratch/

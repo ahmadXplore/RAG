@@ -24,11 +24,15 @@ class Reranker(Protocol):
 class FastEmbedReranker:
     """Reranker using FastEmbed cross-encoder model (e.g. ms-marco-MiniLM-L-6-v2)."""
 
+    _cached_model = None
+
     def __init__(self, model_name: str = "Xenova/ms-marco-MiniLM-L-6-v2") -> None:
         if not _FASTEMBED_RERANK_AVAILABLE:
             raise RuntimeError("fastembed cross-encoder is required for FastEmbedReranker")
         self.model_name = model_name
-        self._model = TextCrossEncoder(model_name=model_name)
+        if FastEmbedReranker._cached_model is None:
+            FastEmbedReranker._cached_model = TextCrossEncoder(model_name=model_name)
+        self._model = FastEmbedReranker._cached_model
 
     def rerank(
         self,

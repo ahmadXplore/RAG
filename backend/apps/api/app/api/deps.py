@@ -146,9 +146,14 @@ async def check_document_access(
     return True
 
 
+from apps.api.app.core.rate_limit import _get_real_client_ip
+
+
 def get_client_ip(request: Request) -> str:
-    """Extract client IP safely from request headers or client host."""
-    forwarded = request.headers.get("X-Forwarded-For")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
-    return request.client.host if request.client else "127.0.0.1"
+    """Extract client IP safely using trusted-proxy-aware extraction.
+
+    Uses the same Cloudflare-hardened logic as the rate limiter:
+    only trusts X-Forwarded-For / CF-Connecting-IP when the connecting
+    socket belongs to a known upstream proxy or Cloudflare CIDR range.
+    """
+    return _get_real_client_ip(request)

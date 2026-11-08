@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from apps.api.app.api.deps import get_current_user, get_session
 from apps.api.app.config import get_settings
 from apps.api.app.core.exceptions import ConflictException, UnauthorizedException
-from apps.api.app.core.rate_limit import rate_limit_login
+from apps.api.app.core.rate_limit import rate_limit_login, rate_limit_register
 from apps.api.app.core.security import create_access_token, hash_password, verify_password
 from apps.api.app.models.user import User
 from apps.api.app.repositories.user_repo import UserRepository
@@ -30,6 +30,7 @@ settings = get_settings()
 async def register(
     user_in: UserCreate,
     session: AsyncSession = Depends(get_session),
+    _rl: None = Depends(rate_limit_register),
 ) -> UserRead:
     """Register a new user account.
 

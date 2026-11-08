@@ -49,6 +49,15 @@ class ConflictException(AppException):
         super().__init__(code="CONFLICT", message=message, status_code=status.HTTP_409_CONFLICT)
 
 
+class BadRequestException(AppException):
+    def __init__(self, message: str = "Bad request"):
+        super().__init__(
+            code="BAD_REQUEST",
+            message=message,
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+
+
 def get_request_id(request: Request) -> str:
     """Retrieve request ID from state or header."""
     return getattr(request.state, "request_id", request.headers.get("X-Request-ID", "unknown"))

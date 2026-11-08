@@ -2,18 +2,18 @@ import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 
 /**
- * Route protection middleware.
+ * Route protection proxy (renamed from middleware.ts → proxy.ts for Next.js 16+).
  * Redirects unauthenticated users to /login.
  * Redirects non-admin users away from /admin/*.
  *
  * Rule 20: This is UI-only; backend is the authoritative authorization layer.
- * The backend enforces RBAC on every API call regardless of this middleware.
+ * The backend enforces RBAC on every API call regardless of this proxy.
  */
 
 const PUBLIC_PATHS = ["/", "/login", "/register"];
 const ADMIN_PREFIX = "/admin";
 
-export function middleware(request: NextRequest) {
+export function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
   // Skip static files and Next.js internals
@@ -42,7 +42,7 @@ export function middleware(request: NextRequest) {
 
   // Admin route guard — role check happens client-side after hydration;
   // backend will 403 any unauthorized API call regardless.
-  // We don't decode JWT in middleware to avoid edge runtime crypto complexity.
+  // We don't decode JWT in proxy to avoid edge runtime crypto complexity.
 
   return NextResponse.next();
 }
@@ -50,3 +50,4 @@ export function middleware(request: NextRequest) {
 export const config = {
   matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"],
 };
+

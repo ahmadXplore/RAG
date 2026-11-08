@@ -7,6 +7,8 @@ Provides:
 
 from __future__ import annotations
 
+from collections import defaultdict
+import re
 import uuid
 from typing import Any
 
@@ -83,6 +85,7 @@ async def get_observability_metrics(
     )
 
     # 4. Latency Stage Breakdown (Average ms)
+    # Fix #8: Marked as static baseline — these are engineering estimates, not live APM data.
     stage_breakdown = {
         "preprocessing_ms": 38.2,
         "retrieval_ms": 195.4,
@@ -123,11 +126,17 @@ async def get_observability_metrics(
             "prompt_tokens": estimated_prompt_tokens,
             "completion_tokens": estimated_completion_tokens,
             "estimated_cost_usd": estimated_cost_usd,
+            # Fix #7: clearly signal these are derived estimates, not live billing data.
+            "is_estimated": True,
+            "estimation_note": "Calculated from query/corpus volume; not real LLM billing data",
         },
         "latencies": {
             "avg_total_ms": avg_total_ms,
             "p95_total_ms": p95_total_ms,
             "stage_breakdown": stage_breakdown,
+            # Fix #8: signal static baseline so UI can display a disclaimer.
+            "is_static_baseline": True,
+            "baseline_note": "Stage values are engineering baseline estimates; real tracing requires APM integration",
         },
         "queries": {
             "total_queries": total_queries,
@@ -212,11 +221,12 @@ async def analyze_user_conversations(
     )
     total_citation_clicks = cit_clicks_res.scalar_one() or 0
 
-    # 3. User Feedback (+/-) and Corrections tracked in audit logs
+    # 3. User Feedback (+/-) and Corrections tracked in audit logs (Fix #2: cap to 500 rows to prevent unbounded scan/OOM)
     feedback_logs_res = await session.execute(
         select(AuditLog)
         .where(AuditLog.action == "user_feedback")
         .order_by(AuditLog.created_at.desc())
+        .limit(500)
     )
     feedback_logs = feedback_logs_res.scalars().all()
 
@@ -257,26 +267,31 @@ async def analyze_user_conversations(
     frustration_incidents = []
     idk_incidents = []
 
+    # Fix #9 & #6: Use word-boundary regex instead of substring matching to avoid false-positives.
+    # Replaced bare "hallucination" noun (which matches factual research queries like "Does RAG prevent hallucination?")
+    # with explicit expressions of user frustration.
     FRUSTRATION_KEYWORDS = [
-        "wrong",
         "not what i asked",
         "not what i wanted",
         "unhelpful",
-        "incorrect",
         "doesn't make sense",
         "does not make sense",
         "stop hallucinating",
+        "you are hallucinating",
+        "hallucinating again",
+        "stop making things up",
+        "made up answer",
         "useless",
-        "false",
         "bad answer",
         "garbage",
         "are you serious",
         "can't answer",
         "cannot answer",
         "lying",
-        "hallucination",
         "terrible",
         "awful",
+        "wrong answer",
+        "incorrect answer",
     ]
 
     CANONICAL_IDK_PHRASE = "I cannot find that in the provided documentation"
@@ -294,26 +309,35 @@ async def analyze_user_conversations(
     fallback_count = 0
     idk_triggers_count = 0
 
+    # Fix #8: Track user queries across conversations to detect cross-conversation repeated questions
+    user_seen_prompts: dict[str, set[str]] = defaultdict(set)
+
     for conv in convs:
         msgs = conv.messages or []
-        msgs_sorted = sorted(msgs, key=lambda m: m.created_at)
-        total_turns = len(msgs_sorted)
-        total_turns_across_all += total_turns
+        # Fix #10: Compute real counts on the full message list so long conversations
+        # are not undercounted or misrepresented in metrics.
+        real_total_turns = len(msgs)
+        real_user_msgs = [m for m in msgs if m.role == "user"]
+        real_asst_msgs = [m for m in msgs if m.role == "assistant"]
+        real_fallbacks = sum(1 for m in real_asst_msgs if getattr(m, "abstained", False))
 
-        user_msgs = [m for m in msgs_sorted if m.role == "user"]
-        asst_msgs = [m for m in msgs_sorted if m.role == "assistant"]
-
-        total_user_queries += len(user_msgs)
-        total_assistant_responses += len(asst_msgs)
-
-        fallback_in_conv = sum(1 for m in asst_msgs if getattr(m, "abstained", False))
-        fallback_count += fallback_in_conv
+        total_turns_across_all += real_total_turns
+        total_user_queries += len(real_user_msgs)
+        total_assistant_responses += len(real_asst_msgs)
+        fallback_count += real_fallbacks
 
         anon_user = f"User #{str(conv.user_id)[:6]}" if conv.user_id else "Guest User"
-        is_struggling = total_turns >= 10
+        is_struggling = real_total_turns >= 10
 
         if is_struggling:
             struggling_count += 1
+
+        # Safe windowing: cap at 200 most-recent messages strictly for text regex/pattern matching loops
+        msgs_sorted = sorted(msgs, key=lambda m: m.created_at)
+        if len(msgs_sorted) > 200:
+            msgs_sorted = msgs_sorted[-200:]
+
+        user_msgs = [m for m in msgs_sorted if m.role == "user"]
 
         # Track "I don't know" rates and exact triggers
         for idx, m in enumerate(msgs_sorted):
@@ -338,19 +362,19 @@ async def analyze_user_conversations(
                         "abstained": getattr(m, "abstained", False),
                     })
 
-        # Record longest conversations (keep >= 4 turns or flagged struggling)
-        if total_turns >= 4 or is_struggling:
-            first_q = user_msgs[0].content[:80] if user_msgs else "New Chat"
-            last_q = user_msgs[-1].content[:80] if user_msgs else "New Chat"
+        # Record longest conversations (keep >= 4 turns or flagged struggling) using full metrics
+        if real_total_turns >= 4 or is_struggling:
+            first_q = real_user_msgs[0].content[:80] if real_user_msgs else "New Chat"
+            last_q = real_user_msgs[-1].content[:80] if real_user_msgs else "New Chat"
             longest_conversations.append({
                 "conversation_id": str(conv.id),
                 "anonymized_user": anon_user,
                 "title": conv.title or "Research Conversation",
-                "total_turns": total_turns,
-                "user_turns": len(user_msgs),
-                "assistant_turns": len(asst_msgs),
+                "total_turns": real_total_turns,
+                "user_turns": len(real_user_msgs),
+                "assistant_turns": len(real_asst_msgs),
                 "is_struggling": is_struggling,
-                "fallbacks_encountered": fallback_in_conv,
+                "fallbacks_encountered": real_fallbacks,
                 "first_query": first_q,
                 "last_query": last_q,
                 "started_at": conv.created_at.isoformat(),
@@ -358,12 +382,17 @@ async def analyze_user_conversations(
             })
 
         # Scan for implicit frustration
-        seen_prompts: set[str] = set()
+        user_key = str(conv.user_id) if conv.user_id else f"conv_{conv.id}"
+        user_prompts = user_seen_prompts[user_key]
+
         for idx, u_msg in enumerate(user_msgs):
             content_lower = u_msg.content.lower().strip()
 
-            # 1. Keyword check
-            matched_kw = next((kw for kw in FRUSTRATION_KEYWORDS if kw in content_lower), None)
+            # Fix #9 & #6: Use word-boundary regex match instead of substring to avoid false positives.
+            matched_kw = next(
+                (kw for kw in FRUSTRATION_KEYWORDS if re.search(r'\b' + re.escape(kw) + r'\b', content_lower)),
+                None,
+            )
             if matched_kw:
                 frustration_incidents.append({
                     "conversation_id": str(conv.id),
@@ -375,9 +404,9 @@ async def analyze_user_conversations(
                     "turn_index": idx + 1,
                 })
 
-            # 2. Repeated identical question check
+            # Fix #8: Repeated identical question check (within conversation and across user conversations)
             if len(content_lower) > 10:
-                if content_lower in seen_prompts:
+                if content_lower in user_prompts:
                     frustration_incidents.append({
                         "conversation_id": str(conv.id),
                         "anonymized_user": anon_user,
@@ -388,7 +417,7 @@ async def analyze_user_conversations(
                         "turn_index": idx + 1,
                     })
                 else:
-                    seen_prompts.add(content_lower)
+                    user_prompts.add(content_lower)
 
     longest_conversations.sort(key=lambda x: x["total_turns"], reverse=True)
     frustration_incidents.sort(key=lambda x: x["timestamp"], reverse=True)
@@ -462,7 +491,8 @@ async def analyze_user_conversations(
             "thumbs_down_count": thumbs_down_count,
             "satisfaction_rate": satisfaction_rate,
             "idk_triggers_count": idk_triggers_count,
-            "idk_rate": idk_rate_pct,
+            # Fix #14: idk_rate is the single source of truth in idk_metrics.idk_rate.
+            # Removed from summary to prevent the two fields silently diverging.
         },
         "feedback_metrics": {
             "total_feedback": total_feedback,
