@@ -199,15 +199,13 @@ async def _node_contextualize_query(state: GraphState, provider: Any) -> GraphSt
         state["tool_calls"] = state.get("tool_calls", 0) + 1
         return state
 
-    # Pronouns & short follow-up detection
+    # Pronouns & short follow-up detection: only rewrite if there are ambiguous pronouns or colloquial fragments
     PRONOUNS = {"it", "its", "they", "them", "their", "this", "that", "these", "those", "he", "she"}
     words = set(q_norm.split())
     has_pronoun = bool(words & PRONOUNS)
-    is_short_followup = len(words) <= 6 and (
-        has_pronoun or q_norm.startswith(("what about", "how about", "why", "who", "when", "how", "and", "where"))
-    )
+    is_fragment_followup = q_norm.startswith(("what about", "how about", "and ", "also ", "what if "))
 
-    if is_continuation or is_short_followup or has_pronoun:
+    if is_continuation or has_pronoun or is_fragment_followup:
         try:
             messages = build_contextualize_query_messages(question, history)
             raw = await provider.generate(messages=messages, response_schema={})
@@ -710,11 +708,16 @@ class RAGGraph:
         async def generate_node(s: GraphState) -> GraphState:
             return await _node_generate(s, generator)
 
+        async def retrieve_node(s: GraphState) -> GraphState:
+            """Run retrieval in a thread pool — ONNX embedder + reranker are CPU-bound."""
+            import asyncio as _asyncio
+            return await _asyncio.to_thread(_node_retrieve, s, retriever)
+
         graph.add_node("contextualize_query", contextualize_query_node)
         graph.add_node("classify_query", classify_query_node)
         graph.add_node("extract_constraints", extract_constraints_node)
         graph.add_node("apply_access_filter", _node_apply_access_filter)
-        graph.add_node("retrieve", lambda s: _node_retrieve(s, retriever))
+        graph.add_node("retrieve", retrieve_node)
         graph.add_node("assess_evidence", _node_assess_evidence)
         graph.add_node("expand_query", expand_query_node)
         graph.add_node("retrieve_comparison", retrieve_comparison_node)

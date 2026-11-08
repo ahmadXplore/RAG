@@ -56,6 +56,64 @@ def _sse_release(user_id: str) -> None:
         _sse_active[user_id] = max(0, current - 1)
 
 
+_global_rag_graph: RAGGraph | None = None
+
+
+def get_shared_rag_graph() -> RAGGraph:
+    """Return a process-wide singleton RAGGraph to avoid re-initializing embedders and models on every request."""
+    global _global_rag_graph
+    if _global_rag_graph is not None:
+        return _global_rag_graph
+
+    settings = get_settings()
+    from packages.llm.generation import RAGGenerator
+    from packages.llm.providers import build_provider_from_settings
+    from packages.retrieval.dense import DenseRetriever
+    from packages.retrieval.hybrid import HybridRetriever
+    from packages.retrieval.qdrant_client import create_qdrant_client
+    from packages.retrieval.sparse import SparseRetriever
+
+    provider = build_provider_from_settings()
+    client = create_qdrant_client(url=settings.QDRANT_URL, api_key=settings.QDRANT_API_KEY)
+    try:
+        from packages.retrieval.embeddings import BM25SparseEmbedder, FastEmbedDenseEmbedder
+
+        dense_emb = FastEmbedDenseEmbedder()
+        sparse_emb = BM25SparseEmbedder()
+    except Exception:
+        from packages.retrieval.embeddings import DeterministicMockEmbedder
+
+        dense_emb = DeterministicMockEmbedder()
+        sparse_emb = dense_emb
+
+    try:
+        from packages.retrieval.reranker import FastEmbedReranker
+
+        reranker = FastEmbedReranker()
+    except Exception:
+        from packages.retrieval.reranker import LexicalSemanticMockReranker
+
+        reranker = LexicalSemanticMockReranker()
+
+    dense = DenseRetriever(client=client, embedder=dense_emb)
+    sparse = SparseRetriever(client=client, embedder=sparse_emb)
+    retriever = HybridRetriever(
+        dense_retriever=dense,
+        sparse_retriever=sparse,
+        reranker=reranker,
+    )
+    generator = RAGGenerator(provider=provider)
+
+    _global_rag_graph = RAGGraph(
+        provider=provider,
+        retriever=retriever,
+        generator=generator,
+        max_retrieval_attempts=settings.AGENT_MAX_RETRIEVAL_ATTEMPTS,
+        max_tool_calls=settings.AGENT_MAX_TOOL_CALLS,
+    )
+    return _global_rag_graph
+
+
 class ChatService:
     """Manages chat conversations, message persistence, and streaming execution."""
 
@@ -73,54 +131,7 @@ class ChatService:
         """Resolve or lazily construct the agentic RAGGraph."""
         if self._graph is not None:
             return self._graph
-
-        settings = get_settings()
-        from packages.llm.generation import RAGGenerator
-        from packages.llm.providers import build_provider_from_settings
-        from packages.retrieval.dense import DenseRetriever
-        from packages.retrieval.hybrid import HybridRetriever
-        from packages.retrieval.qdrant_client import create_qdrant_client
-        from packages.retrieval.sparse import SparseRetriever
-
-        provider = build_provider_from_settings()
-        client = create_qdrant_client(url=settings.QDRANT_URL, api_key=settings.QDRANT_API_KEY)
-        try:
-            from packages.retrieval.embeddings import BM25SparseEmbedder, FastEmbedDenseEmbedder
-
-            dense_emb = FastEmbedDenseEmbedder()
-            sparse_emb = BM25SparseEmbedder()
-        except Exception:
-            from packages.retrieval.embeddings import DeterministicMockEmbedder
-
-            dense_emb = DeterministicMockEmbedder()
-            sparse_emb = dense_emb
-
-        try:
-            from packages.retrieval.reranker import FastEmbedReranker
-
-            reranker = FastEmbedReranker()
-        except Exception:
-            from packages.retrieval.reranker import LexicalSemanticMockReranker
-
-            reranker = LexicalSemanticMockReranker()
-
-        dense = DenseRetriever(client=client, embedder=dense_emb)
-        sparse = SparseRetriever(client=client, embedder=sparse_emb)
-        retriever = HybridRetriever(
-            dense_retriever=dense,
-            sparse_retriever=sparse,
-            reranker=reranker,
-        )
-        generator = RAGGenerator(provider=provider)
-
-        self._graph = RAGGraph(
-            provider=provider,
-            retriever=retriever,
-            generator=generator,
-            max_retrieval_attempts=settings.AGENT_MAX_RETRIEVAL_ATTEMPTS,
-            max_tool_calls=settings.AGENT_MAX_TOOL_CALLS,
-        )
-        return self._graph
+        return get_shared_rag_graph()
 
     async def _resolve_conversation(
         self,
@@ -406,10 +417,11 @@ class ChatService:
             return
 
         try:
-            conv = await self._resolve_conversation(
-                request.conversation_id, current_user, request.message
+            # Parallelize conversation lookup and document authorization (both are independent DB reads)
+            conv, authorized_docs = await asyncio.gather(
+                self._resolve_conversation(request.conversation_id, current_user, request.message),
+                self._resolve_authorized_docs_metadata(current_user),
             )
-            authorized_docs = await self._resolve_authorized_docs_metadata(current_user)
             authorized_doc_ids = [d["id"] for d in authorized_docs]
 
             # Record user message in DB
@@ -500,11 +512,11 @@ class ChatService:
             import re
             answer = gen_result.answer
             tokens = re.findall(r"\S+|\n+|[^\S\r\n]+", answer)
-            chunk_size = 2
+            chunk_size = 5
             for i in range(0, len(tokens), chunk_size):
                 token_chunk = "".join(tokens[i : i + chunk_size])
                 yield _sse_event("token", {"token": token_chunk})
-                await asyncio.sleep(0.012)
+                await asyncio.sleep(0.002)
 
             # Record assistant message in DB
             assistant_msg_id = uuid.uuid4()

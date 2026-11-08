@@ -41,8 +41,8 @@ class RetrievalDiagnostics:
 class RetrievalConfig:
     """Configurable pipeline candidate thresholds and parameters."""
 
-    dense_k: int = 30
-    sparse_k: int = 30
-    fusion_k: int = 20
-    rerank_k: int = 10
+    dense_k: int = 20
+    sparse_k: int = 20
+    fusion_k: int = 6
+    rerank_k: int = 5
     rrf_k: int = 60
