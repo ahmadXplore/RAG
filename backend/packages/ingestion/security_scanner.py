@@ -40,12 +40,17 @@ class FileSecurityScanner:
     MAX_UNCOMPRESSED_RATIO = 100       # Zip bomb protection
     MAX_UNCOMPRESSED_SIZE = 300 * 1024 * 1024  # 300 MB
 
+    DANGEROUS_EMBEDDED_EXTENSIONS = {
+        ".exe", ".bat", ".cmd", ".vbs", ".vbe", ".js", ".jse",
+        ".wsf", ".wsh", ".msc", ".scr", ".com", ".pif", ".hta",
+        ".cpl", ".jar", ".ps1", ".msi", ".dll", ".sh"
+    }
+
     # Dangerous PDF object patterns (inspected outside compressed stream bodies)
     PDF_MALICIOUS_PATTERNS = [
         (re.compile(rb"/JavaScript\b"), "Embedded JavaScript action (/JavaScript)"),
         (re.compile(rb"/S\s*/JavaScript\b"), "Embedded JavaScript action (/S /JavaScript)"),
         (re.compile(rb"/Launch\b"), "Executable launch command (/Launch)"),
-        (re.compile(rb"/EmbeddedFiles\b"), "Embedded binary file payload (/EmbeddedFiles)"),
         (re.compile(rb"/OpenAction\s*<<[^>]*?/Launch"), "Auto-executing launch on document open"),
         (re.compile(rb"/RichMedia\b"), "Flash/RichMedia active content"),
     ]
@@ -121,8 +126,14 @@ class FileSecurityScanner:
                     threats.append("Encrypted or password-protected PDFs cannot be ingested")
                     return
                 if doc.embfile_count() > 0:
-                    threats.append(f"Embedded binary file payload detected ({doc.embfile_count()} embedded file(s))")
-                    return
+                    for fname in doc.embfile_names():
+                        ext_lower = Path(fname).suffix.lower()
+                        if ext_lower in cls.DANGEROUS_EMBEDDED_EXTENSIONS:
+                            threats.append(
+                                f"Dangerous executable payload '{fname}' detected in embedded PDF files"
+                            )
+                            return
+                    # Safe companion files (source code, figures, datasets) are permitted
         except Exception:
             pass
 
