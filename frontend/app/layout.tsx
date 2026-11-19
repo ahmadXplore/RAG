@@ -15,17 +15,18 @@ const scriptSrc = isDev
   ? "'self' 'unsafe-inline' 'unsafe-eval'"
   : "'self' 'unsafe-inline'";
 
+const apiUrl = process.env.NEXT_PUBLIC_API_URL || "https://rag-production-507bfa97.up.railway.app";
+
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en">
       <head>
-        {/* Rule 7: Content-Security-Policy — tightened in production (no unsafe-eval) */}
+        {/* Rule 7: Content-Security-Policy — allow self, Railway API, and local dev */}
         <meta
           httpEquiv="Content-Security-Policy"
-          content={`default-src 'self'; script-src ${scriptSrc}; style-src 'self' 'unsafe-inline'; connect-src 'self' http://localhost:8000 ws://localhost:8000; img-src 'self' data:; frame-ancestors 'none';`}
+          content={`default-src 'self'; script-src ${scriptSrc}; style-src 'self' 'unsafe-inline'; connect-src 'self' https://*.railway.app https://rag-production-507bfa97.up.railway.app wss://*.railway.app http://localhost:8000 ws://localhost:8000 ${apiUrl}; img-src 'self' data: https:;`}
         />
         <meta httpEquiv="X-Content-Type-Options" content="nosniff" />
-        <meta httpEquiv="X-Frame-Options" content="DENY" />
       </head>
       <body>
         <Providers>{children}</Providers>
