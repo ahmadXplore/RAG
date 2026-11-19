@@ -3,14 +3,12 @@ FROM python:3.11-slim AS builder
 
 WORKDIR /app
 
-# System deps needed to compile some Python packages
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     libpq-dev \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy dependency spec and install into a prefix
 COPY pyproject.toml .
 RUN pip install --upgrade pip setuptools wheel
 RUN pip install --prefix=/install \
@@ -48,32 +46,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq5 \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy installed packages from builder
 COPY --from=builder /install /usr/local
 
-# Copy application source and configs
+# Copy application source, configs, and startup script
 COPY backend/ ./backend/
 COPY pyproject.toml .
 COPY alembic.ini .
+COPY start.sh .
 
-# Pre-download FastEmbed ONNX models at build time so cold starts are fast
-RUN python -c "\
-from pathlib import Path; \
-import sys; sys.path.insert(0, 'backend'); \
-try: \
-    from fastembed import TextEmbedding, SparseTextEmbedding; \
-    TextEmbedding('BAAI/bge-small-en-v1.5'); \
-    SparseTextEmbedding('Qdrant/bm25'); \
-    print('Models cached'); \
-except Exception as e: \
-    print(f'Model pre-cache skipped: {e}') \
-" || true
+# Ensure cache directories exist and are writable
+ENV FASTEMBED_CACHE_PATH=/tmp/cache
+ENV HF_HOME=/tmp/cache
+RUN mkdir -p /tmp/cache && chmod -R 777 /tmp/cache
+RUN chmod +x start.sh
 
-# Non-root user for security
-RUN useradd -m -u 1000 appuser && chown -R appuser /app
-USER appuser
-
+ENV PORT=8000
 EXPOSE 8000
 
-# Run migrations then start server binding to Railway dynamic $PORT or 8000
-CMD ["sh", "-c", "python -m alembic upgrade head && python -m uvicorn apps.api.app.main:app --host 0.0.0.0 --port ${PORT:-8000} --app-dir backend --workers 1"]
+CMD ["./start.sh"]

@@ -1,11 +1,10 @@
 # Railway project configuration
 [build]
 builder = "dockerfile"
-dockerfilePath = "Dockerfile.backend"
+dockerfilePath = "Dockerfile"
 
 [deploy]
-startCommand = "sh -c 'python -m uvicorn apps.api.app.main:app --host 0.0.0.0 --port $PORT --app-dir backend --workers 1'"
 healthcheckPath = "/health"
-healthcheckTimeout = 120
+healthcheckTimeout = 180
 restartPolicyType = "on_failure"
 restartPolicyMaxRetries = 3
