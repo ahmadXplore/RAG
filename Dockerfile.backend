@@ -14,7 +14,8 @@ RUN pip install --upgrade pip setuptools wheel
 RUN pip install --prefix=/install \
     "fastapi>=0.111.0" \
     "uvicorn[standard]>=0.30.0" \
-    "sqlalchemy>=2.0.30" \
+    "sqlalchemy[asyncio]>=2.0.30" \
+    "greenlet>=3.0.0" \
     "alembic>=1.13.1" \
     "pydantic>=2.7.4" \
     "pydantic-settings>=2.3.4" \
