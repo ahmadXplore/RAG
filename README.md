@@ -1,4 +1,13 @@
 <p align="center">
+  <a href="https://rag-three-sigma.vercel.app/" target="_blank">
+    <img src="https://img.shields.io/badge/🚀_Live_Demo-rag--three--sigma.vercel.app-4f46e5?style=for-the-badge&logo=vercel&logoColor=white" alt="Live Demo" />
+  </a>
+  <a href="https://rag-production-507bfa97.up.railway.app/health" target="_blank">
+    <img src="https://img.shields.io/badge/⚡_API_Status-Online-009688?style=for-the-badge&logo=fastapi&logoColor=white" alt="API Status" />
+  </a>
+</p>
+
+<p align="center">
   <img src="https://img.shields.io/badge/Domain-Educational_Research_Intelligence-4f46e5?style=for-the-badge&logo=googlescholar&logoColor=white" alt="Domain" />
   <img src="https://img.shields.io/badge/Python-3.11+-3776ab?style=for-the-badge&logo=python&logoColor=white" alt="Python" />
   <img src="https://img.shields.io/badge/FastAPI-0.111+-009688?style=for-the-badge&logo=fastapi&logoColor=white" alt="FastAPI" />
@@ -14,6 +23,11 @@
 
 <p align="center">
   <strong>Production-grade Educational Research Intelligence &amp; Autonomous Agentic RAG Platform engineered for deep literature synthesis, multi-hop curricular analysis, and statistical reasoning across global educational corpora.</strong>
+</p>
+
+<p align="center">
+  🌐 <strong>Live Web Application:</strong> <a href="https://rag-three-sigma.vercel.app/" target="_blank">https://rag-three-sigma.vercel.app/</a> &nbsp;|&nbsp;
+  📡 <strong>Production API:</strong> <a href="https://rag-production-507bfa97.up.railway.app/health" target="_blank">https://rag-production-507bfa97.up.railway.app/</a>
 </p>
 
 ---
