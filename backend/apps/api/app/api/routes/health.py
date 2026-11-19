@@ -98,20 +98,10 @@ async def health_redis() -> RedisHealthResponse:
     connected = False
 
     try:
-        import urllib.parse
-
-        parsed = urllib.parse.urlparse(settings.REDIS_URL)
-        host = parsed.hostname or "localhost"
-        port = parsed.port or 6379
-        import asyncio
-
-        reader, writer = await asyncio.wait_for(asyncio.open_connection(host, port), timeout=1.0)
-        writer.write(b"PING\r\n")
-        await writer.drain()
-        line = await asyncio.wait_for(reader.readline(), timeout=1.0)
-        writer.close()
-        await writer.wait_closed()
-        connected = b"+PONG" in line
+        import redis.asyncio as aioredis
+        client = aioredis.from_url(settings.REDIS_URL, socket_connect_timeout=2)
+        connected = bool(await client.ping())
+        await client.aclose()
     except Exception:
         connected = False
 
