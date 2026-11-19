@@ -13,7 +13,17 @@ from sqlalchemy.ext.asyncio import (
 
 settings = get_settings()
 
-_is_sqlite = settings.DATABASE_URL.startswith("sqlite")
+db_url = settings.DATABASE_URL
+if "asyncpg" in db_url:
+    # asyncpg expects 'ssl' parameter instead of psycopg's 'sslmode'
+    if "sslmode=" in db_url:
+        db_url = db_url.replace("sslmode=", "ssl=")
+    # asyncpg does not support channel_binding query param
+    if "channel_binding=" in db_url:
+        import re
+        db_url = re.sub(r"[?&]channel_binding=[^&]+", "", db_url)
+
+_is_sqlite = db_url.startswith("sqlite")
 
 # Bug fix: SQLite has a single-writer lock that causes "database is locked" errors
 # under concurrent async requests. Fix this with two complementary settings:
@@ -33,7 +43,7 @@ if _is_sqlite:
     from sqlalchemy.pool import QueuePool
 
     engine: AsyncEngine = create_async_engine(
-        settings.DATABASE_URL,
+        db_url,
         echo=settings.DEBUG,
         future=True,
         connect_args={
@@ -55,7 +65,7 @@ if _is_sqlite:
 
 else:
     engine: AsyncEngine = create_async_engine(
-        settings.DATABASE_URL,
+        db_url,
         echo=settings.DEBUG,
         future=True,
         pool_size=10,
