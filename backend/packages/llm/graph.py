@@ -338,8 +338,7 @@ def _node_apply_access_filter(state: GraphState) -> GraphState:
     authorized_docs = state.get("authorized_documents", [])
     filters = dict(state.get("retrieval_filters", {}))
     filters.update(state.get("base_filters", {}))
-    if auth_ids:
-        filters["authorized_document_ids"] = auth_ids
+    filters["authorized_document_ids"] = auth_ids
 
     # Document routing: if user question or constraint targeted a specific document/book in corpus
     target_doc_title = filters.pop("document_title", None)
@@ -781,6 +780,9 @@ class RAGGraph:
         Returns:
             GenerationResult — only the public fields; CoT state is discarded.
         """
+        if not authorized_document_ids:
+            return self._authorization_abstention()
+
         initial_state: GraphState = {
             "question": question,
             "conversation_history": conversation_history or [],
@@ -830,6 +832,16 @@ class RAGGraph:
         # Discard CoT state — return only the generation result (Rule 11)
         return result
 
+    @staticmethod
+    def _authorization_abstention() -> GenerationResult:
+        return GenerationResult(
+            answer="You do not have access to any documents in the database.",
+            citation_ids=[],
+            grounded=False,
+            abstained=True,
+            query_type="DIRECT",
+        )
+
     async def astream_run(
         self,
         question: str,
@@ -840,6 +852,13 @@ class RAGGraph:
         conversation_history: list[dict[str, str]] | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
         """Execute the agentic RAG pipeline yielding real-time step progress and final result."""
+        if not authorized_document_ids:
+            yield {
+                "type": "result",
+                "result": self._authorization_abstention(),
+            }
+            return
+
         initial_state: GraphState = {
             "question": question,
             "conversation_history": conversation_history or [],

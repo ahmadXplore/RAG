@@ -51,9 +51,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Copy installed packages from builder
 COPY --from=builder /install /usr/local
 
-# Copy application source
+# Copy application source and configs
 COPY backend/ ./backend/
 COPY pyproject.toml .
+COPY alembic.ini .
 
 # Pre-download FastEmbed ONNX models at build time so cold starts are fast
 RUN python -c "\
@@ -74,5 +75,5 @@ USER appuser
 
 EXPOSE 8000
 
-# Run migrations then start server
-CMD ["sh", "-c", "python -m alembic -c backend/infra/migrations/alembic.ini upgrade head && python -m uvicorn apps.api.app.main:app --host 0.0.0.0 --port 8000 --app-dir backend --workers 1"]
+# Run migrations then start server binding to Railway dynamic $PORT or 8000
+CMD ["sh", "-c", "python -m alembic upgrade head && python -m uvicorn apps.api.app.main:app --host 0.0.0.0 --port ${PORT:-8000} --app-dir backend --workers 1"]

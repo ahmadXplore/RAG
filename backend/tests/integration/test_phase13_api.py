@@ -23,6 +23,7 @@ from apps.api.app.models.user import Role, User
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from packages.llm.generation import GenerationResult
+from packages.llm.graph import RAGGraph
 from packages.schemas.common import AccessPermission, RoleType
 
 
@@ -222,6 +223,36 @@ class TestPhase13SearchEndpoints:
         assert "query_id" in body
         assert "results" in body
 
+    @pytest.mark.asyncio
+    async def test_search_extra_filter_cannot_override_document_access(
+        self, async_client, setup_users_and_docs
+    ):
+        tokens = setup_users_and_docs
+        headers = {"Authorization": f"Bearer {tokens['viewer_token']}"}
+        retriever = MagicMock()
+        retriever.retrieve.return_value = ([], MagicMock())
+
+        with patch(
+            "apps.api.app.services.search_service.SearchService._get_retriever",
+            return_value=retriever,
+        ):
+            response = await async_client.post(
+                "/api/v1/search",
+                json={
+                    "query": "Microsoft revenue",
+                    "filters": {
+                        "extra": {
+                            "authorized_document_ids": [tokens["doc2_id"]],
+                        }
+                    },
+                },
+                headers=headers,
+            )
+
+        assert response.status_code == 200
+        search_filters = retriever.retrieve.call_args.kwargs["filters"]
+        assert search_filters["authorized_document_ids"] == [tokens["doc1_id"]]
+
 
 class TestPhase13ChatEndpoints:
     @pytest.mark.asyncio
@@ -262,6 +293,30 @@ class TestPhase13ChatEndpoints:
             assert len(body["citations"]) == 1
 
     @pytest.mark.asyncio
+    async def test_chat_abstains_when_user_has_no_document_grants(
+        self, async_client, setup_users_and_docs
+    ):
+        tokens = setup_users_and_docs
+        headers = {"Authorization": f"Bearer {tokens['analyst_token']}"}
+        graph = object.__new__(RAGGraph)
+
+        with patch(
+            "apps.api.app.services.chat_service.ChatService._get_graph",
+            return_value=graph,
+        ):
+            response = await async_client.post(
+                "/api/v1/chat",
+                json={"message": "What is in the documents?"},
+                headers=headers,
+            )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["abstained"] is True
+        assert body["grounded"] is False
+        assert body["citations"] == []
+
+    @pytest.mark.asyncio
     async def test_chat_streaming_sse(self, async_client, setup_users_and_docs):
         tokens = setup_users_and_docs
         headers = {"Authorization": f"Bearer {tokens['viewer_token']}"}
@@ -290,6 +345,29 @@ class TestPhase13ChatEndpoints:
             assert "event: query_started" in text
             assert "event: token" in text
             assert "event: completed" in text
+
+    @pytest.mark.asyncio
+    async def test_chat_stream_abstains_when_user_has_no_document_grants(
+        self, async_client, setup_users_and_docs
+    ):
+        tokens = setup_users_and_docs
+        headers = {"Authorization": f"Bearer {tokens['analyst_token']}"}
+        graph = object.__new__(RAGGraph)
+
+        with patch(
+            "apps.api.app.services.chat_service.ChatService._get_graph",
+            return_value=graph,
+        ):
+            response = await async_client.post(
+                "/api/v1/chat/stream",
+                json={"message": "What is in the documents?"},
+                headers=headers,
+            )
+
+        assert response.status_code == 200
+        assert "event: completed" in response.text
+        assert '"grounded": false' in response.text
+        assert '"abstained": true' in response.text
 
 
 class TestPhase13EvaluationsEndpoints:

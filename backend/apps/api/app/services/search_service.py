@@ -214,7 +214,13 @@ class SearchService:
                 resolved_dt = resolve_document_type(f.document_type)
                 target_doc_types = resolved_dt or [f.document_type]
             if f.extra:
-                filters.update(f.extra)
+                filters.update(
+                    {
+                        key: value
+                        for key, value in f.extra.items()
+                        if key != "authorized_document_ids"
+                    }
+                )
 
         # Infer document type from query text if not explicitly selected
         if not target_doc_types:

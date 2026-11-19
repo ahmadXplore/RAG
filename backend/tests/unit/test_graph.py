@@ -133,7 +133,10 @@ class TestApplyAccessFilter:
         state: GraphState = {
             "question": "test",
             "authorized_document_ids": ["doc-1", "doc-2"],
-            "base_filters": {"company": "Acme"},
+            "base_filters": {
+                "company": "Acme",
+                "authorized_document_ids": ["unauthorized-doc"],
+            },
             "retrieval_filters": {},
             "retrieval_attempts": 0,
             "evidence": [],
@@ -148,14 +151,13 @@ class TestApplyAccessFilter:
         state: GraphState = {
             "question": "test",
             "authorized_document_ids": [],
-            "base_filters": {},
+            "base_filters": {"authorized_document_ids": ["unauthorized-doc"]},
             "retrieval_filters": {},
             "retrieval_attempts": 0,
             "evidence": [],
         }
         result = _node_apply_access_filter(state)
-        # Empty list is fine — Qdrant will return nothing for empty auth list
-        assert "authorized_document_ids" not in result["retrieval_filters"]
+        assert result["retrieval_filters"]["authorized_document_ids"] == []
 
 
 class TestAssessEvidence:
@@ -418,3 +420,42 @@ async def test_graph_loop_bounded_by_max_retrieval_attempts():
     # Retriever called at most max_retrieval_attempts times
     assert retriever.retrieve.call_count <= 2
     assert isinstance(result, GenerationResult)
+
+
+@pytest.mark.asyncio
+async def test_graph_run_abstains_without_authorized_documents():
+    graph = object.__new__(RAGGraph)
+    graph._graph = MagicMock()
+    graph._graph.ainvoke = AsyncMock()
+
+    result = await graph.run(
+        question="What is in the documents?",
+        authorized_document_ids=[],
+        user_id="user-test",
+    )
+
+    assert result.abstained is True
+    assert result.grounded is False
+    assert result.citation_ids == []
+    graph._graph.ainvoke.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_graph_stream_abstains_without_authorized_documents():
+    graph = object.__new__(RAGGraph)
+    graph._graph = MagicMock()
+    graph._graph.astream = MagicMock()
+
+    events = [
+        event
+        async for event in graph.astream_run(
+            question="What is in the documents?",
+            authorized_document_ids=[],
+            user_id="user-test",
+        )
+    ]
+
+    assert len(events) == 1
+    assert events[0]["type"] == "result"
+    assert events[0]["result"].abstained is True
+    graph._graph.astream.assert_not_called()
