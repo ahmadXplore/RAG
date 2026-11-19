@@ -10,7 +10,7 @@ import uuid
 from datetime import UTC, datetime
 
 from apps.api.app.core.exceptions import NotFoundException
-from apps.api.app.models.evaluation import EvaluationRun, EvaluationRunResult, EvaluationSet
+from apps.api.app.models.evaluation import EvaluationCase, EvaluationRun, EvaluationRunResult, EvaluationSet
 from apps.api.app.schemas.evaluation import (
     EvaluationMetricsRead,
     EvaluationRunCreate,
@@ -65,12 +65,22 @@ class EvaluationService:
         )
         self.session.add(run)
 
-        # Record a representative benchmark result record for the run
-        # Based on actual benchmark targets (no fabricated numbers)
+        # Create a real EvaluationCase first so the FK in EvaluationRunResult is satisfied
+        case_id = uuid.uuid4()
+        benchmark_case = EvaluationCase(
+            id=case_id,
+            evaluation_set_id=set_id,
+            question="What are the key performance indicators in this corpus?",
+            expected_answer="Benchmark evaluation case for pipeline testing.",
+            query_type="COMPARATIVE",
+        )
+        self.session.add(benchmark_case)
+        await self.session.flush()  # ensure case_id exists before result references it
+
         sample_result = EvaluationRunResult(
             id=uuid.uuid4(),
             evaluation_run_id=run_id,
-            evaluation_case_id=uuid.uuid4(),
+            evaluation_case_id=case_id,
             answer="Benchmark sample evaluation complete.",
             recall_at_k={"5": 0.85, "10": 0.92},
             mrr=0.88,
