@@ -1,0 +1,13 @@
+# Railway deployment config for the BACKEND service
+# Place this at the repo root; Railway reads it automatically.
+
+[build]
+builder = "dockerfile"
+dockerfilePath = "Dockerfile.backend"
+
+[deploy]
+startCommand = "sh -c 'cd backend && python -m alembic -c infra/migrations/alembic.ini upgrade head && cd .. && python -m uvicorn apps.api.app.main:app --host 0.0.0.0 --port $PORT --app-dir backend --workers 1'"
+healthcheckPath = "/health"
+healthcheckTimeout = 60
+restartPolicyType = "on_failure"
+restartPolicyMaxRetries = 3
