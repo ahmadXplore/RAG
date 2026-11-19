@@ -84,13 +84,14 @@ app = FastAPI(
     redirect_slashes=False,
 )
 
-# CORS — explicit allowlist; never use wildcard in production (Rule 7, Rule 4)
+# CORS — allow origins from settings plus any Vercel preview/production domains
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.CORS_ORIGINS,
+    allow_origin_regex=r"^https://.*\.vercel\.app$",
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
-    allow_headers=["Authorization", "Content-Type", "X-Request-ID"],
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 

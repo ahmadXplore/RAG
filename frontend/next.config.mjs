@@ -13,12 +13,24 @@ const nextConfig = {
     ],
   },
 
-  // Backend API URL rewrite so frontend never exposes the raw backend URL to the browser
+  // Backend API URL rewrite so frontend can proxy requests directly to backend without CORS
   async rewrites() {
+    const backendUrl =
+      process.env.NEXT_PUBLIC_API_URL ||
+      process.env.BACKEND_URL ||
+      'https://rag-production-507bfa97.up.railway.app';
     return [
       {
         source: '/api/backend/:path*',
-        destination: `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/:path*`,
+        destination: `${backendUrl}/api/:path*`,
+      },
+      {
+        source: '/api/v1/:path*',
+        destination: `${backendUrl}/api/v1/:path*`,
+      },
+      {
+        source: '/health/:path*',
+        destination: `${backendUrl}/health/:path*`,
       },
     ];
   },
