@@ -38,6 +38,7 @@ venv.bak/
 .env.local
 .env.production
 .env.staging
+deployment-guide.md
 .env.*.local
 *.pem
 *.key
