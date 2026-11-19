@@ -36,6 +36,8 @@ venv.bak/
 # Environment and secrets (CRITICAL: Rule 4, 8)
 .env
 .env.local
+.env.production
+.env.staging
 .env.*.local
 *.pem
 *.key
